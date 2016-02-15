@@ -45,6 +45,8 @@ proc getEndpoint(self: KintoClient, kind: string, bucket, collection, id=""): st
     id
   ]
 
+#proc paginated(self: KintoClient, endpoint: string, records: JsonNode = nil, ifNoneMatch = 0
+
 proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions: JsonNode = nil, headers = ""): tuple[body: JsonNode, headers: StringTableRef] =
   let parsed = parseUri(endpoint)
   var actualUrl: string
@@ -54,9 +56,8 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
     actualUrl = endpoint
 
   var extraHeaders = ""
-  if not self.auth.isNil:
-    extraHeaders.add(self.auth)
-
+  extraHeaders.add(headers)
+  extraHeaders.add(self.auth)
 
   var payload = newJObject()
 
@@ -66,10 +67,13 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
   if not permissions.isNil:
     payload.fields.add((key: "permissions", val: permissions))
 
+  let tmp = $payload
+  extraHeaders.add("Content-Length: " & $len(tmp) & "\c\L")
+
   let response = request(actualUrl,
                          httpMethod,
                          extraHeaders,
-                         if payload.len > 0: $payload else: "",
+                         if payload.len > 0: tmp else: "",
                          userAgent=USER_AGENT)
 
 
@@ -96,17 +100,27 @@ proc getCacheHeaders(self: KintoClient, safe: bool, data: JsonNode = nil, lastMo
   if safe and not lastModified != 0:
     result = "If-Match: " & $lastModified & "\c\L"
 
-proc createBucket*(self: KintoClient, bucket: string, data, permissions: JsonNode = nil, safe = true, ifNotExists = false): JsonNode =
+proc createBucket*(self: KintoClient, bucket = "", safe = true, ifNotExists = false): JsonNode =
   if ifNotExists:
     try:
-      return self.createBucket(bucket, data, permissions, safe)
+      return self.createBucket(bucket, safe)
     except KintoException:
       let e = cast[KintoException](getCurrentException())
       if e.response.getStatusCode() != 412:
-        raise
+        raise getCurrentException()
 
-  let headers = if safe: DO_NOT_OVERWRITE else: ""
-  var (body, _) = self.request($httpPUT, self.getEndpoint(BUCKET, bucket), data=data, permissions=permissions, headers=headers)
+  let headers =
+    if safe:
+      DO_NOT_OVERWRITE
+    else:
+      ""
+  let data =
+    if bucket != "":
+      %*{"id": bucket}
+    else:
+      nil
+
+  var (body, _) = self.request($httpPOST, self.getEndpoint(BUCKETS), data=data, headers=headers)
   result = body
 
 proc updateBucket*(self: KintoClient, bucket: string, data, permissions: JsonNode = nil, safe = true, lastModified = 0): JsonNode =
@@ -125,3 +139,5 @@ proc deleteBucket*(self: KintoClient, bucket: string, safe = true, lastModified 
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
   var (body, _) = self.request($httpDELETE, self.getEndpoint(BUCKET, bucket), headers=headers)
   result = body["data"]
+
+#proc getCollections(self: KintoClient, bucket = ""): JsonNode =
