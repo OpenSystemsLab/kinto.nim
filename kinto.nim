@@ -15,7 +15,7 @@ type
 
 const
   USER_AGENT = "kinto.nim/0.0.1"
-  DO_NOT_OVERWRITE = "If-None-Match: *\c\L"
+  DO_NOT_OVERWRITE = "If-None-Match: \"*\"\c\L"
 
   ROOT =         "$#/"
   BATCH =        "$#/batch"
@@ -26,11 +26,8 @@ const
   RECORDS =      "$#/buckets/$#/collections/$#/records"      # NOQA
   RECORD =       "$#/buckets/$#/collections/$#/records/$#"  # NOQA
 
-
-let
-  L = newConsoleLogger()
-
 when defined(debug):
+  let L = newConsoleLogger()
   addHandler(L)
 
 proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection =""): KintoClient =
@@ -82,6 +79,9 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
   else:
     tmp = ""
 
+  debug("Header: ", extraHeaders)
+  debug("Payload: ", tmp)
+
   let response = request(actualUrl,
                          httpMethod,
                          extraHeaders,
@@ -111,7 +111,7 @@ proc getCacheHeaders(self: KintoClient, safe: bool, data: JsonNode = nil, lastMo
   if lastModified != 0 and (not data.isNil and data.hasKey("last_modified")):
     lastModified = getNum(data["last_modified"]).int
   if safe and not lastModified != 0:
-    result = "If-Match: \"" & $lastModified & "\"\c\L"
+    result = "If-Match: \"$#\"\c\L" % [$lastModified]
 
 proc getBucket*(self: KintoClient, bucket: string): JsonNode =
   try:
