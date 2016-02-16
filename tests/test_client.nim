@@ -3,7 +3,7 @@ import ../kinto, ../util
 
 suite "BucketTest":
   setUp:
-    let bucket = "test"
+    let bucket = "kinto1"
     let client = newKintoClient("https://ss.huy.im/v1", "kinto", "s3cret")
 
     var resp: JsonNode

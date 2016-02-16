@@ -1,4 +1,4 @@
-import httpclient, strtabs, strutils, json, uri, base64
+import httpclient, strtabs, strutils, json, uri, base64, logging
 import util
 type
   KintoException* = object of Exception
@@ -7,9 +7,9 @@ type
   BucketNotFoundException* = KintoException
 
   KintoClient = ref object
-    serverUrl: string
+    remote: string
+    headers: string
     root: string
-    auth: string
     bucket: string
     collection: string
 
@@ -27,13 +27,21 @@ const
   RECORD =       "$#/buckets/$#/collections/$#/records/$#"  # NOQA
 
 
-proc newKintoClient*(serverUrl: string, username, password = "", bucket = "default", collection =""): KintoClient =
+let
+  L = newConsoleLogger()
+
+when defined(debug):
+  addHandler(L)
+
+proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection =""): KintoClient =
   new(result)
 
-  result.serverUrl = strip(serverUrl, leading = false, chars={'/'}) & "/"
-  result.root = ""
+  result.remote = strip(remote, leading = false, chars={'/'}) & "/"
+  result.headers = ""
   if username != "":
-    result.auth = "Authorization: Basic " & encode(username & ":" & password) & "\c\L"
+    result.headers.add("Authorization: Basic " & encode(username & ":" & password) & "\c\L")
+
+  result.root = ""
   result.bucket = bucket
   result.collection = collection
 
@@ -51,13 +59,13 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
   let parsed = parseUri(endpoint)
   var actualUrl: string
   if parsed.scheme == "":
-    actualUrl = self.serverUrl & strip(endpoint, chars={'/'})
+    actualUrl = self.remote & strip(endpoint, chars={'/'})
   else:
     actualUrl = endpoint
 
   var extraHeaders = ""
+  extraHeaders.add(self.headers)
   extraHeaders.add(headers)
-  extraHeaders.add(self.auth)
 
   var payload = newJObject()
 
@@ -67,21 +75,26 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
   if not permissions.isNil:
     payload.fields.add((key: "permissions", val: permissions))
 
-  let tmp = $payload
-  extraHeaders.add("Content-Length: " & $len(tmp) & "\c\L")
+  var tmp: string
+  if payload.len > 0:
+    tmp = $payload
+    extraHeaders.add("Content-Length: " & $len(tmp) & "\c\L")
+  else:
+    tmp = ""
 
   let response = request(actualUrl,
                          httpMethod,
                          extraHeaders,
-                         if payload.len > 0: tmp else: "",
+                         tmp,
                          userAgent=USER_AGENT)
 
 
-  echo "Status: ", response.status
-  echo "Body: ", response.body
-  let status = response.getStatusCode()
+  debug("Status: ", response.status)
+  debug("Body: ", response.body)
 
   let body = parseJson(response.body)
+
+  let status = response.getStatusCode()
 
   if status < 200 or status >= 400:
     let error = newException(KintoException, "$# - $#" % [$status, body["message"].str])
@@ -98,16 +111,25 @@ proc getCacheHeaders(self: KintoClient, safe: bool, data: JsonNode = nil, lastMo
   if lastModified != 0 and (not data.isNil and data.hasKey("last_modified")):
     lastModified = getNum(data["last_modified"]).int
   if safe and not lastModified != 0:
-    result = "If-Match: " & $lastModified & "\c\L"
+    result = "If-Match: \"" & $lastModified & "\"\c\L"
+
+proc getBucket*(self: KintoClient, bucket: string): JsonNode =
+  try:
+    var (body, _) = self.request($httpGET, self.getEndpoint(BUCKET, bucket))
+    result = body
+  except KintoException:
+    raise newException(BucketNotFoundException, bucket)
 
 proc createBucket*(self: KintoClient, bucket = "", safe = true, ifNotExists = false): JsonNode =
   if ifNotExists:
     try:
       return self.createBucket(bucket, safe)
     except KintoException:
-      let e = cast[KintoException](getCurrentException())
+      let e = (ref KintoException)(getCurrentException())
       if e.response.getStatusCode() != 412:
-        raise getCurrentException()
+        raise e
+      result = self.getBucket(bucket)
+      return
 
   let headers =
     if safe:
@@ -128,12 +150,6 @@ proc updateBucket*(self: KintoClient, bucket: string, data, permissions: JsonNod
   var (body, _) = self.request($httpPUT, self.getEndpoint(BUCKET, bucket), data=data, permissions=permissions, headers=headers)
   result = body
 
-proc getBucket*(self: KintoClient, bucket: string): JsonNode =
-  try:
-    var (body, _) = self.request($httpGET, self.getEndpoint(BUCKET, bucket))
-    result = body
-  except KintoException:
-    raise newException(BucketNotFoundException, bucket)
 
 proc deleteBucket*(self: KintoClient, bucket: string, safe = true, lastModified = 0): JsonNode =
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
