@@ -112,7 +112,7 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
   let status = response.getStatusCode()
 
   if status < 200 or status >= 400:
-    let error = newException(KintoException, "$# - $#" % [$status, body["message"].str])
+    let error = newException(KintoException, $status & " - " & body["message"].str)
     error.response = response
     raise error
 
@@ -127,7 +127,7 @@ proc getCacheHeaders(self: KintoClient, safe: bool, data: JsonNode = nil, lastMo
   if lastModified == 0 and (not data.isNil and data.hasKey("last_modified")):
     lastModified = getNum(data["last_modified"]).int
   if safe and lastModified != 0:
-    result = "If-Match: \"$#\"\c\L" % [$lastModified]
+    result = "If-Match: \"" & $lastModified & "\"\c\L"
 
 proc getBucket*(self: KintoClient, bucket: string): JsonNode =
   try:
