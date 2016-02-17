@@ -1,5 +1,6 @@
 import httpclient, strtabs, strutils, json, uri, base64, logging
-import util
+import private/util
+
 type
   KintoException* = object of Exception
     response*: Response
@@ -12,6 +13,7 @@ type
     root: string
     bucket: string
     collection: string
+    proxy: Proxy
 
 const
   USER_AGENT = "kinto.nim/0.0.1"
@@ -36,17 +38,23 @@ when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
 
-proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection =""): KintoClient =
+proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection ="", proxy: tuple[url: string, auth: string]): KintoClient =
   new(result)
 
   result.remote = strip(remote, leading = false, chars={'/'}) & "/"
-  result.headers = ""
+  result.headers = "Content-Type: application/json\c\LAccept: application/json\c\L"
   if username != "":
     result.headers.add("Authorization: Basic " & encode(username & ":" & password) & "\c\L")
+
 
   result.root = ""
   result.bucket = bucket
   result.collection = collection
+
+  result.proxy = newProxy(proxy[0], proxy[1])
+
+proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection ="", proxy: string): KintoClient =
+  newKintoClient(remote, username, password, bucket, collection, (proxy, ""))
 
 proc getEndpoint(self: KintoClient, kind: string, bucket, collection, id=""): string =
   return kind % [
@@ -94,7 +102,8 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, permissions:
                          httpMethod,
                          extraHeaders,
                          tmp,
-                         userAgent=USER_AGENT)
+                         userAgent=USER_AGENT,
+                         proxy=self.proxy)
 
   debug("Status: ", response.status)
   debug("Body: ", response.body)
@@ -153,13 +162,13 @@ proc updateBucket*(self: KintoClient, bucket: string, data, permissions: JsonNod
       ""
   headers.add(self.getCacheHeaders(safe, data, lastModified))
 
-  var (body, _) = self.request($httpPUT, self.getEndpoint(BUCKET, bucket), data=data, permissions=permissions, headers=headers)
+  var (body, _) = self.request($httpPUT, self.getEndpoint(BUCKET, bucket), permissions=permissions, headers=headers)
   result = body
 
 proc deleteBucket*(self: KintoClient, bucket: string, safe = true, lastModified = 0): JsonNode =
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
   var (body, _) = self.request($httpDELETE, self.getEndpoint(BUCKET, bucket), headers=headers)
-  result = body["data"]
+  result = body
 
 proc getBuckets*(self: KintoClient): JsonNode =
   var (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS))
@@ -199,7 +208,7 @@ proc updateCollection*(self: KintoClient, collection: string, bucket = "", data,
   result = body
 
 proc patchCollection*(self: KintoClient, collection: string, bucket = "", data, permissions: JsonNode = nil): JsonNode =
-  var(body, _) = self.request("PATCH", self.getEndpoint(COLLECTION, bucket or self.bucket, collection), data=data, permissions=permissions)
+  var(body, _) = self.request("httpPATCH", self.getEndpoint(COLLECTION, bucket or self.bucket, collection), data=data, permissions=permissions)
   result = body
 
 proc deleteCollection*(self: KintoClient, collection: string, bucket = "", safe = true, lastModified = 0): JsonNode =
@@ -219,7 +228,7 @@ proc createRecord*(self: KintoClient, data: JsonNode, collection, bucket = "", p
   var (body, _) = self.request($httpPOST, self.getEndpoint(RECORDS, bucket or self.bucket, collection or self.collection), data=data, permissions=permissions)
   result = body
 
-proc updateRecord*(self: KintoClient, record: string, collection, bucket = "", data, permissions: JsonNode = nil, safe = true, ifNotExists = false, lastModified = 0): JsonNode =
+proc updateRecord*(self: KintoClient, record: string, data: JsonNode = nil, collection, bucket = "", permissions: JsonNode = nil, safe = true, ifNotExists = false, lastModified = 0): JsonNode =
   if ifNotExists:
     try:
       return self.createRecord(data, collection, bucket, permissions=permissions)
@@ -240,18 +249,18 @@ proc updateRecord*(self: KintoClient, record: string, collection, bucket = "", d
   var (body, _) = self.request($httpPUT, self.getEndpoint(RECORD, bucket or self.bucket, collection or self.collection, record), data=data, permissions=permissions, headers=headers)
   result = body
 
-proc patchRecord*(self: KintoClient, record: string, collection, bucket = "", data, permissions: JsonNode = nil): JsonNode =
-  var(body, _) = self.request("PATCH", self.getEndpoint(RECORD, bucket or self.bucket, collection or self.collection, record), data=data, permissions=permissions)
+proc patchRecord*(self: KintoClient, record: string, data: JsonNode = nil, collection, bucket = "", permissions: JsonNode = nil): JsonNode =
+  var(body, _) = self.request("httpPATCH", self.getEndpoint(RECORD, bucket or self.bucket, collection or self.collection, record), data=data, permissions=permissions)
   result = body
 
 proc deleteRecord*(self: KintoClient, record: string, collection, bucket = "", safe = true, lastModified = 0): JsonNode =
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
   var (body, _) = self.request($httpDELETE, self.getEndpoint(RECORD, bucket or self.bucket, collection or self.collection, record), headers=headers)
-  result = body["data"]
+  result = body
 
 proc deleteRecords*(self: KintoClient, record: string, collection, bucket = ""): JsonNode =
   var (body, _) = self.request($httpDELETE, self.getEndpoint(RECORD, bucket or self.bucket, collection or self.collection, record))
-  result = body["data"]
+  result = body
 
 proc getRecords*(self: KintoClient, collection, bucket = ""): JsonNode =
   var (body, _) = self.request($httpGET, self.getEndpoint(RECORDS, bucket or self.bucket, collection or self.collection))
