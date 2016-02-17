@@ -200,14 +200,14 @@ proc use*(client: KintoClient, bucket: string) =
     raise newException(ValueError, "Bucket name is required")
   client.bucket = bucket
 
-proc getBuckets*(self: KintoClient): seq[Bucket] =
+proc bucketList*(self: KintoClient): seq[Bucket] =
   ## Returns the list of accessible buckets
   result = @[]
   var (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
   for node in body["data"].items:
     result.add(newBucket(node["id"].str, node["last_modified"].num.int))
 
-proc getBucket*(self: KintoClient, id: string): Bucket =
+proc bucketGet*(self: KintoClient, id: string): Bucket =
   ## Returns a specific bucket by its ID
   try:
     var (body, _) = self.request($httpGET, self.getEndpoint(BUCKET_ENDPOINT, id))
@@ -216,25 +216,28 @@ proc getBucket*(self: KintoClient, id: string): Bucket =
   except KintoException:
     raise newException(BucketNotFoundException, "Bucket not found or not accessible: " & id)
 
-proc createBucket*(self: KintoClient, bucket = "", perms: Permissions = nil): Bucket =
+proc bucketCreate*(self: KintoClient, id = "", perms: Permissions = nil): Bucket =
   ## Creates a new bucket. If id is not provided, it is automatically generated.
   var data: JsonNode
-  if bucket != "":
-    data = %*{"id": bucket}
+  if id != "":
+    data = %*{"id": id}
 
   var (body, _) = self.request("httpPOST", self.getEndpoint(BUCKETS_ENDPOINT), data=data, perms=perms)
   result = newBucket(body["data"]["id"].str, body["data"]["last_modified"].num.int)
   result.permissions = newPermissions(body["permissions"])
 
-proc updateBucket*(self: KintoClient, permissions: JsonNode = nil, safe = true, ifNotExists = false, lastModified = 0): JsonNode =
+proc updateBucket*(self: KintoClient, data: JsonNode = nil, perms: Permissions = nil, safe = true, ifNotExists = false, lastModified = 0): Bucket =
   var headers = ""
   if ifNotExists:
     headers.add(DO_NOT_OVERWRITE)
 
-  headers.add(self.getCacheHeaders(safe, data, lastModified))
+  if safe:
+    headers.add(self.getCacheHeaders(safe, data, lastModified))
 
-  var (body, _) = self.request("httpPUT", self.getEndpoint(BUCKET_ENDPOINT, bucket), permissions=permissions, headers=headers)
-  result = body
+  var (body, _) = self.request("httpPUT", self.getEndpoint(BUCKET_ENDPOINT, bucket), perms=perms, headers=headers)
+  result = newBucket(body["data"]["id"].str, body["data"]["last_modified"].num.int)
+  result.permissions = newPermissions(body["permissions"])
+
 
 proc deleteBucket*(self: KintoClient, bucket: string, safe = true, lastModified = 0): JsonNode =
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
