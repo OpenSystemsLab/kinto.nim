@@ -28,7 +28,7 @@ const
   RECORDS =      "$#/buckets/$#/collections/$#/records"      # NOQA
   RECORD =       "$#/buckets/$#/collections/$#/records/$#"  # NOQA
 
-proc `or`(a, b: string): string =
+proc `or`(a, b: string): string {.inline, noSideEffect.} =
   if a.isNil or a == "":
     b
   else:
@@ -56,12 +56,12 @@ proc newKintoClient*(remote: string, username, password = "", bucket = "default"
 proc newKintoClient*(remote: string, username, password = "", bucket = "default", collection ="", proxy: string): KintoClient =
   newKintoClient(remote, username, password, bucket, collection, (proxy, ""))
 
-proc getEndpoint(self: KintoClient, kind: string, bucket, collection, id=""): string =
-  return kind % [
+proc getEndpoint(self: KintoClient, kind: string, bucket, collection, record = ""): string {.inline, noSideEffect.} =
+  kind % [
     self.root,
-    if bucket != "": bucket else: self.bucket,
-    if bucket != "": collection else: self.collection,
-    id
+    bucket or self.bucket,
+    collection or self.collection,
+    record
   ]
 
 #proc paginated(self: KintoClient, endpoint: string, records: JsonNode = nil, ifNoneMatch = 0
