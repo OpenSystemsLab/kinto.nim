@@ -18,8 +18,8 @@ type
     proxy: Proxy
 
   KintoObject = object of RootObj
-    id: string
-    last_modified: int
+    id*: string
+    last_modified*: int
     permissions*: Permissions
 
   Permissions = object of RootObj
@@ -29,7 +29,7 @@ type
 
   Bucket* = object of KintoObject
     ## Kinto bucket instance
-  Collection* = object of KintoObject
+  Collection* =  KintoObject
     ## Kinto collection instance
   Model* = object of KintoObject
     ## Kinto record instance
@@ -55,6 +55,14 @@ const
 when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
+
+proc id*(k: KintoObject): string {.inline.} =
+  ## Getter of Object ID
+  k.id
+
+proc lastModified*(k: KintoObject): int {.inline.} =
+  ## Getter of last modified
+  k.lastModified
 
 proc newPermissions(node: JsonNode = nil): Permissions =
   ## Create new permissions object
@@ -265,31 +273,12 @@ proc getCollections*(self: KintoClient): seq[Collection] =
   ## Returns the list of accessible buckets
   result = @[]
   var (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
-  for node in body["data"].items:
-    var c: Collection
-    c.id = node["id"].str
-    c.lastModified = node["last_modified"].num.int
-
-    result.add(c)
-
-macro toK(obj: KintoObject, json: JsonNode): stmt =
-  result = quote do:
-    for name, value in `obj`.fieldPairs:
-      echo `obj`.`name`
+#  unpack(result, body["data"])
 
 proc getCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   try:
     var (body, _) = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
-    var data = body["data"]
-
-    tok(result, data)
-    #for name, value in result.fieldPairs:
-      #if data.hasKey(name):
-      #  #result.name = data["name"]
-
-
-
-    result.lastModified = body["data"]["last_modified"].num.int
+    unpack(result, body["data"])
     result.permissions = newPermissions(body["permissions"])
   except KintoException:
     raise
@@ -301,7 +290,7 @@ proc createCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   data["data"].fields.add((key: "id", val: newJString(id)))
 
   var (body, _) = self.request($httpPOST, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket), data)
-  result.lastModified = body["data"]["last_modified"].num.int
+  unpack(result, body["data"])
   result.permissions = newPermissions(body["permissions"])
 
 discard """
