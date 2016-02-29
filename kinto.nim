@@ -1,4 +1,5 @@
-import httpclient, strtabs, strutils, json, uri, base64, logging, typetraits, macros
+import httpclient, strtabs, strutils, uri, base64, logging, typetraits, macros, ../jsmn.nim/jsmn
+import json except parseJson
 import private/util
 
 type
@@ -276,6 +277,8 @@ proc getCollections*(self: KintoClient): seq[Collection] =
 #  unpack(result, body["data"])
 
 proc getCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
+  var
+    tokens = array[64, JsmnToken]
   try:
     var (body, _) = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
     unpack(result, body["data"])
