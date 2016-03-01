@@ -111,10 +111,10 @@ proc `%`(self: KintoObject): JsonNode =
   for name, value in self.fieldPairs:
     when not (name in @["last_modified", "deleted", "permissions"]):
       if not value.isNil:
-        data.fields.add((key: name, val: %value))
+        data.add(name, %value)
 
   if data.len > 0:
-    result.fields.add((key: "data", val: data))
+    result.add("data", data)
 
 proc Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: tuple[url: string, auth: string]): KintoClient =
   ## Create new Kinto API client with proxy configurated
