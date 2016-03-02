@@ -141,7 +141,7 @@ template Kinto*(remote: string, username, password = "", bucket = "default", col
 proc getEndpoint(self: KintoClient, kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
   kind % [a or self.bucket, b or self.collection, c]
 
-proc request(self: KintoClient, httpMethod, endpoint: string, data: JsonNode = nil, headers = ""): tuple[body: JsonNode, headers: StringTableRef] =
+proc request(self: KintoClient, httpMethod, endpoint: string, data: JsonNode = nil, headers = ""): tuple[body: JsmnBase, headers: StringTableRef] =
   let parsed = parseUri(endpoint)
   var actualUrl: string
   if parsed.scheme == "":
@@ -172,18 +172,15 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data: JsonNode = n
   debug("Status: ", response.status)
   debug("Body: ", response.body)
 
-  let body = parseJson(response.body)
+  let body = Jsmn(response.body)
   let status = response.getStatusCode()
 
   if status < 200 or status >= 400:
-    let error = newException(KintoException, $status & " - " & body["message"].str)
+    let error = newException(KintoException, $status & " - " & body["message"].getStr)
     error.response = response
     raise error
 
-  if status == 304:
-    result = (newJNull(), response.headers)
-  else:
-    result = (body, response.headers)
+  result = (body, response.headers)
 
 proc getCacheHeaders(self: KintoObject, safe: bool, lastModified = 0): string =
   result = ""
@@ -219,8 +216,8 @@ proc getBuckets*(self: KintoClient): seq[Bucket] =
   var (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
   for node in body["data"].items:
     var b: Bucket
-    b.id = node["id"].str
-    b.lastModified = node["last_modified"].num.int
+    b.id = node["id"].getStr
+    b.lastModified = node["last_modified"].getInt
 
     result.add(b)
 
@@ -231,9 +228,9 @@ proc getBucket*(self: KintoClient, id: string): Bucket =
   try:
     var (body, _) = self.request($httpGET, self.getEndpoint(BUCKET_ENDPOINT, id))
 
-    result.id = body["data"]["id"].str
-    result.lastModified = body["data"]["last_modified"].num.int
-    result.permissions = newPermissions(body["permissions"])
+    result.id = body["data"]["id"].getStr
+    result.lastModified = body["data"]["last_modified"].getInt
+    body["permissions"].loadObject(result.permissions)
   except KintoException:
     raise newException(BucketNotFoundException, "Bucket not found or not accessible: " & id)
 
@@ -246,9 +243,10 @@ proc createBucket*(self: KintoClient, id = ""): Bucket =
 
   var (body, _) = self.request("httpPOST", self.getEndpoint(BUCKETS_ENDPOINT), %result)
 
-  result.lastModified = body["data"]["last_modified"].num.int
+  result.lastModified = body["data"]["last_modified"].getInt
   if body.hasKey("permission"):
-    result.permissions = newPermissions(body["permissions"])
+    body["permissions"].loadObject(result.permissions)
+
 
 proc save*(self: KintoClient, bucket: var Bucket, safe = true, forceOverwrite = false) =
   ## Creates or replaces a bucket with a specific ID
@@ -259,8 +257,9 @@ proc save*(self: KintoClient, bucket: var Bucket, safe = true, forceOverwrite = 
   headers.add(bucket.getCacheHeaders(safe))
 
   var (body, _) = self.request("httpPUT", self.getEndpoint(BUCKET_ENDPOINT, bucket.id), %bucket, headers=headers)
-  bucket.lastModified = body["data"]["last_modified"].num.int
-  bucket.permissions = newPermissions(body["permissions"])
+  bucket.lastModified = body["data"]["last_modified"].getInt
+  body["permissions"].loadObject(bucket.permissions)
+
 
 proc drop*(self: KintoClient, bucket: Bucket, safe = true, lastModified = 0) =
   let headers = bucket.getCacheHeaders(safe, lastModified=lastModified)
@@ -277,12 +276,11 @@ proc getCollections*(self: KintoClient): seq[Collection] =
 #  unpack(result, body["data"])
 
 proc getCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
-  var
-    tokens = array[64, JsmnToken]
   try:
     var (body, _) = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
-    unpack(result, body["data"])
-    result.permissions = newPermissions(body["permissions"])
+
+    body["data"].loadObject(result)
+    body["permissions"].loadObject(result.permissions)
   except KintoException:
     raise
 
@@ -293,8 +291,9 @@ proc createCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   data["data"].fields.add((key: "id", val: newJString(id)))
 
   var (body, _) = self.request($httpPOST, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket), data)
-  unpack(result, body["data"])
-  result.permissions = newPermissions(body["permissions"])
+  body["data"].loadObject(result)
+  body["permissions"].loadObject(result.permissions)
+
 
 discard """
 proc updateCollection*(self: KintoObject, collection: string, bucket = "", data, permissions: JsonNode = nil, safe = true, ifNotExists = false, lastModified = 0): JsonNode =

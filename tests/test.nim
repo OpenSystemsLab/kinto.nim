@@ -1,4 +1,4 @@
-import ../kinto, marshal, json, ../private/util.nim
+import ../kinto, marshal, ../private/util.nim, ../../jsmn.nim/jsmn
 
 type
   Direction = enum
@@ -10,17 +10,6 @@ type
     bits: uint32
     dir: Direction
 
-#var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
-#var tasks = db.getCollection(Tasks)
-#echo $$tasks
-
-var t: Tasks
-t.description = "Test task"
-t.bits = 5
-t.dir = east
-
-echo $$t
-let node = parseJson($$t)
-
-var t1: Tasks
-unpack(t1, node)
+var db = Kinto("https://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
+var tasks = db.getCollection(Tasks)
+echo $$tasks
