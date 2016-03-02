@@ -263,7 +263,6 @@ proc save*(self: KintoClient, bucket: var Bucket, safe = true, forceOverwrite = 
 
 proc drop*(self: KintoClient, bucket: Bucket, safe = true, lastModified = 0) =
   let headers = bucket.getCacheHeaders(safe, lastModified=lastModified)
-  #var (body, _) = self.request($httpDELETE, self.getEndpoint(BUCKET_ENDPOINT, bucket.id), headers=headers)
   discard self.request($httpDELETE, self.getEndpoint(BUCKET_ENDPOINT, bucket.id), headers=headers)
 
 #----------------------------
@@ -272,8 +271,12 @@ proc drop*(self: KintoClient, bucket: Bucket, safe = true, lastModified = 0) =
 proc getCollections*(self: KintoClient): seq[Collection] =
   ## Returns the list of accessible buckets
   result = @[]
-  var (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
-#  unpack(result, body["data"])
+  var
+    (body, _) = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
+    c: Collection
+  for n in body["data"].items:
+    n.loadObject(c)
+    result.add(c)
 
 proc getCollection*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   try:
