@@ -11,7 +11,10 @@ type
     dir: Direction
 
 var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
-var tasks = db.getCollection(Tasks)
-echo tasks
 
-echo db.getCollections()
+
+var tasks = db.create(Tasks)
+tasks.description = "Fuck yeah!"
+db.save(tasks)
+echo tasks
+db.drop(tasks)
