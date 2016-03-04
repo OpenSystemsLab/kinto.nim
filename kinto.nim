@@ -105,14 +105,23 @@ proc `%`(perms: Permissions): JsonNode =
       createPerms.add(newJString(p))
     result.add("create", createPerms)
 
-proc `%`(self: KintoObject): JsonNode =
+proc dumps[T: KintoObject](self: T): JsonNode =
   result = newJObject()
-  var data = newJObject()
+  var
+    data = newJObject()
+    v: JsonNode
   for name, value in self.fieldPairs:
-    echo name
     when not (name in @["last_modified", "deleted", "permissions"]):
-      if not value.isNil:
-        data.add(name, %value)
+      when value is int or value is int8 or value is int16 or value is int32 or value is int64:
+        v = %(value.BiggestInt)
+      elif value is uint or value is uint8 or value is uint16 or value is uint32 or value is uint64:
+        v = %(value.BiggestInt)
+      elif value is enum:
+        v = newJString($v)
+      else:
+        if value == nil:
+          v = newJNull()
+      data.add(name, v)
 
   if data.len > 0:
     result.add("data", data)
@@ -242,7 +251,7 @@ proc createBucket*(self: KintoClient, id = ""): Bucket =
   if id != "":
     result.id = id
 
-  var (body, _) = self.request("httpPOST", self.getEndpoint(BUCKETS_ENDPOINT), %result)
+  var (body, _) = self.request("httpPOST", self.getEndpoint(BUCKETS_ENDPOINT), result.dumps)
 
   result.lastModified = body["data"]["last_modified"].toInt
   if body.hasKey("permission"):
@@ -256,7 +265,7 @@ proc save*(self: KintoClient, bucket: var Bucket, safe = true, forceOverwrite = 
 
   headers.add(bucket.getCacheHeaders(safe))
 
-  var (body, _) = self.request("httpPUT", self.getEndpoint(BUCKET_ENDPOINT, bucket.id), %bucket, headers=headers)
+  var (body, _) = self.request("httpPUT", self.getEndpoint(BUCKET_ENDPOINT, bucket.id), bucket.dumps, headers=headers)
   bucket.lastModified = body["data"]["last_modified"].toInt
   bucket.permissions = body["permissions"].toObj(Permissions)
 
@@ -303,9 +312,7 @@ proc save*[T](self: KintoClient, collection: var T, safe = true, forceOverwrite 
 
   headers.add(collection.getCacheHeaders(safe))
 
-  echo "aaaaaa ", $(%collection)
-
-  var (body, _) = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), %collection, headers=headers)
+  var (body, _) = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), collection.dumps, headers=headers)
   collection.lastModified = body["data"]["last_modified"].toInt
   collection.permissions = body["permissions"].toObj(Permissions)
 
