@@ -44,7 +44,6 @@ const
   BATCH_ENDPOINT =        "/batch"
   BUCKETS_ENDPOINT =      "/buckets"
   BUCKET_ENDPOINT =       "/buckets/$#"
-  COLLECTIONS_ENDPOINT =  "/buckets/$#/collections"
   COLLECTION_ENDPOINT =   "/buckets/$#/collections/$#"
   RECORDS_ENDPOINT =      "/buckets/$#/collections/$#/records"
   RECORD_ENDPOINT =       "/buckets/$#/collections/$#/records/$#"
@@ -266,23 +265,22 @@ proc get*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   except KintoException:
     raise
 
-proc create*[T: Collection](self: KintoClient, _: typedesc[T]): T =
-  let id = toLower(name(T))
-  var data = "{\"data\": {\"id\":\"" & id & "\"}}";
-  var body = self.request($httpPOST, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket), data)
-  result = toObj[T](body["data"])
-  echo "result: ", result
+proc save*[T: Collection](self: KintoClient, obj: var T, safe = true, forceOverwrite = false) =
+  var
+    headers = ""
+    body: JsonNode
 
-
-proc save*[T: Collection](self: KintoClient, collection: var T, safe = true, forceOverwrite = false) =
-  var headers = ""
   if not forceOverwrite:
     headers.add(DO_NOT_OVERWRITE)
 
-  headers.add(collection.getCacheHeaders(safe))
-  var body = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), toJson(collection), headers=headers)
-  collection.lastModified = body["data"]["last_modified"].toInt
-  collection.permissions = toObj[Permissions](body["data"])
+  if obj.id == nil:
+    obj.id = toLower(name(T))
+  else:
+    headers.add(obj.getCacheHeaders(safe))
+  body = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), toJson(obj), headers=headers)
+
+  obj.lastModified = body["data"]["last_modified"].toInt
+  obj.permissions = toObj[Permissions](body["data"])
 
 proc drop*[T: Collection](self: KintoClient, collection: T, safe = true, lastModified = 0) =
   let headers = collection.getCacheHeaders(safe, lastModified=lastModified)
