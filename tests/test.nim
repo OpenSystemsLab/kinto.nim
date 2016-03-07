@@ -1,4 +1,4 @@
-import ../kinto, marshal, ../private/util.nim, ../../jsmn.nim/jsmn
+import ../kinto, marshal, ../private/util.nim
 
 type
   Direction = enum
