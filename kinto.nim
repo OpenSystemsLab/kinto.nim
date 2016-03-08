@@ -31,7 +31,7 @@ type
     ## Kinto bucket instance
   Collection* = object of KintoObject
     ## Kinto collection instance
-  Model* = object of KintoObject
+  Record* = object of KintoObject
     ## Kinto record instance
   Group* = object of KintoObject
     ## Kinto group instance
@@ -257,13 +257,9 @@ proc getCollections*(self: KintoClient): seq[Collection] =
     result.add(c)
 
 proc get*[T: Collection](self: KintoClient, _: typedesc[T]): T =
-  try:
-    var body = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
-
-    result = toObj[T](body["data"])
-    result.permissions = toObj[Permissions](body["permissions"])
-  except KintoException:
-    raise
+  var body = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
+  result = toObj[T](body["data"])
+  result.permissions = toObj[Permissions](body["permissions"])
 
 proc save*[T: Collection](self: KintoClient, obj: var T, safe = true, forceOverwrite = false) =
   var
@@ -286,11 +282,16 @@ proc drop*[T: Collection](self: KintoClient, collection: T, safe = true, lastMod
   let headers = collection.getCacheHeaders(safe, lastModified=lastModified)
   discard self.request($httpDELETE, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), headers=headers)
 
-discard """
-proc getRecord*(self: KintoObject, record: string, collection, bucket = ""): JsonNode =
-  var body = self.request($httpGET, self.getEndpoint(RECORD_ENDPOINT, bucket or self.bucket, collection or self.collection, record))
-  result = body
+#----------------------------
+# Records
+#----------------------------
 
+proc get*[T: Record](self: KintoClient, id: string): T =
+  var body = self.request($httpGET, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+  result = toObj[T](body["data"])
+  result.permissions = toObj[Permissions](body["permissions"])
+
+discard """
 proc createRecord*(self: KintoObject, data: JsonNode, collection, bucket = "", permissions: JsonNode = nil): JsonNode =
   var body = self.request($httpPOST, self.getEndpoint(RECORDS_ENDPOINT, bucket or self.bucket, collection or self.collection), data=data, permissions=permissions)
   result = body

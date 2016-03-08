@@ -5,16 +5,22 @@ type
     north, east, south, west
 
 type
-  Tasks* = object of Collection
-    description*: string
+  Todo = object of Collection
+    description: string
     bits: uint32
     dir: Direction
 
+  Task = object of Record
+    title: string
+    done: bool
+
+
+
+
 var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
 
-var tasks: Tasks
-tasks.description = "Fuck yeah!"
-db.save(tasks)
+var todo: Todo
+todo.description = "Fuck yeah!"
+db.save(todo)
 
-echo tasks
-db.drop(tasks)
+echo get[Task](db, "1")
