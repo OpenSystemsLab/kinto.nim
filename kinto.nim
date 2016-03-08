@@ -82,20 +82,23 @@ proc newPermissions(node: JsonNode = nil): Permissions =
       for perm in node["create"].items:
         result.create.add(perm.toStr)
 
-proc toJson[T: KintoObject](self: T): string =
+proc `%*`[T: KintoObject](self: T): string =
   result = newStringOfCap(sizeof(self) shl 1)
   result.add "{\"data\":{"
-  var i: int
+  var
+    v: string
+    first = true
   for name, value in self.fieldPairs:
     when not (name in @["last_modified", "deleted", "permissions"]):
-      inc(i)
-  for name, value in self.fieldPairs:
-    when not (name in @["last_modified", "deleted", "permissions"]):
-      dec(i)
-      result.add "\"" & name & "\":"
-      result.add value.dumps()
-      if i > 0:
-        result.add ","
+      v = value.dumps()
+      if v != "null":
+        if first:
+          first = false
+        else:
+          result.add ","
+
+        result.add "\"" & name & "\":"
+        result.add value.dumps()
   result.add "}}"
 
 proc Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: tuple[url: string, auth: string]): KintoClient =
@@ -264,6 +267,7 @@ proc get*[T: Collection](self: KintoClient, _: typedesc[T]): T =
 proc save*[T: Collection](self: KintoClient, obj: var T, safe = true, forceOverwrite = false) =
   var
     headers = ""
+    endpoint: string
     body: JsonNode
 
   if not forceOverwrite:
@@ -271,9 +275,9 @@ proc save*[T: Collection](self: KintoClient, obj: var T, safe = true, forceOverw
 
   if obj.id == nil:
     obj.id = toLower(name(T))
-  else:
-    headers.add(obj.getCacheHeaders(safe))
-  body = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), toJson(obj), headers=headers)
+
+  headers.add(obj.getCacheHeaders(safe))
+  body = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), %*obj, headers=headers)
 
   obj.lastModified = body["data"]["last_modified"].toInt
   obj.permissions = toObj[Permissions](body{}["permissions"])
@@ -291,37 +295,30 @@ proc get*[T: Record](self: KintoClient, id: string): T =
   result = toObj[T](body["data"])
   result.permissions = toObj[Permissions](body["permissions"])
 
-discard """
-proc createRecord*(self: KintoObject, data: JsonNode, collection, bucket = "", permissions: JsonNode = nil): JsonNode =
-  var body = self.request($httpPOST, self.getEndpoint(RECORDS_ENDPOINT, bucket or self.bucket, collection or self.collection), data=data, permissions=permissions)
-  result = body
+proc save*[T: Record](self: KintoClient, obj: var T, safe = true, forceOverwrite = false) =
+  var
+    headers = ""
+    endpoint: string
+    body: JsonNode
 
-proc updateRecord*(self: KintoObject, record: string, data: JsonNode = nil, collection, bucket = "", permissions: JsonNode = nil, safe = true, ifNotExists = false, lastModified = 0): JsonNode =
-  if ifNotExists:
-    try:
-      return self.createRecord(data, collection, bucket, permissions=permissions)
-    except KintoException:
-      let e = (ref KintoException)(getCurrentException())
-      if e.response.getStatusCode() != 412:
-        raise e
-      result = self.getRecord(record, collection, bucket)
-      return
+  if not forceOverwrite:
+    headers.add(DO_NOT_OVERWRITE)
 
-  var headers =
-    if safe:
-      DO_NOT_OVERWRITE
-    else:
-      ""
-  headers.add(self.getCacheHeaders(safe, data, lastModified))
+  headers.add(obj.getCacheHeaders(safe))
 
-  var body = self.request($httpPUT, self.getEndpoint(RECORD_ENDPOINT, bucket or self.bucket, collection or self.collection, record), data=data, permissions=permissions, headers=headers)
-  result = body
+  if empty(obj.id):
+    endpoint = self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection, obj.id)
+  else:
+    endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection)
 
-proc patchRecord*(self: KintoObject, record: string, data: JsonNode = nil, collection, bucket = "", permissions: JsonNode = nil): JsonNode =
-  var(body, _) = self.request("httpPATCH", self.getEndpoint(RECORD_ENDPOINT, bucket or self.bucket, collection or self.collection, record), data=data, permissions=permissions)
-  result = body
+  body = self.request($httpPUT, endpoint, %*obj, headers=headers)
 
-proc deleteRecord*(self: KintoObject, record: string, collection, bucket = "", safe = true, lastModified = 0): JsonNode =
+  if obj.id == nil or obj.id == "":
+    obj.id = body["data"]["id"].toStr
+  obj.lastModified = body{1}["last_modified"].toInt
+  obj.permissions = toObj[Permissions](body{}["permissions"])
+
+discard """proc deleteRecord*(self: KintoObject, record: string, collection, bucket = "", safe = true, lastModified = 0): JsonNode =
   let headers = self.getCacheHeaders(safe, lastModified=lastModified)
   var body = self.request($httpDELETE, self.getEndpoint(RECORD_ENDPOINT, bucket or self.bucket, collection or self.collection, record), headers=headers)
   result = body

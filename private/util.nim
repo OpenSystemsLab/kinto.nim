@@ -11,3 +11,6 @@ proc `or`*(a, b: string): string {.inline, noSideEffect.} =
 
 proc `$`*(p: Proxy): string =
   $p.url
+
+template empty*(s: string): expr =
+  s == nil or s == ""

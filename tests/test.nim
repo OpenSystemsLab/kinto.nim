@@ -15,12 +15,16 @@ type
     done: bool
 
 
-
-
 var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
 
 var todo: Todo
 todo.description = "Fuck yeah!"
 db.save(todo)
 
-echo get[Task](db, "1")
+var t1: Task
+t1
+.title = "Finish API"
+
+db.save(t1)
+
+echo get[Task](db, t1.id)
