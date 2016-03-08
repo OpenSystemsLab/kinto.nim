@@ -260,7 +260,7 @@ proc get*[T: Collection](self: KintoClient, _: typedesc[T]): T =
   try:
     var body = self.request($httpGET, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower))
 
-    result = body["data"].toObj(T)
+    result = toObj[T](body["data"])
     result.permissions = toObj[Permissions](body["permissions"])
   except KintoException:
     raise
@@ -280,7 +280,7 @@ proc save*[T: Collection](self: KintoClient, obj: var T, safe = true, forceOverw
   body = self.request($httpPUT, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, name(T).toLower), toJson(obj), headers=headers)
 
   obj.lastModified = body["data"]["last_modified"].toInt
-  obj.permissions = toObj[Permissions](body["data"])
+  obj.permissions = toObj[Permissions](body{}["permissions"])
 
 proc drop*[T: Collection](self: KintoClient, collection: T, safe = true, lastModified = 0) =
   let headers = collection.getCacheHeaders(safe, lastModified=lastModified)
