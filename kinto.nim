@@ -48,7 +48,7 @@ type
     members*: seq[string]
 
 const
-  USER_AGENT = "kinto.nim/0.0.2"
+  USER_AGENT = "kinto.nim/0.1.1"
   DO_NOT_OVERWRITE = "If-None-Match: \"*\"\c\L"
 
   BATCH_ENDPOINT =        "/batch"
