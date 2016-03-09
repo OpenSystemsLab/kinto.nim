@@ -1,8 +1,8 @@
 [Package]
 name          = "Kinto"
-version       = "0.1.0"
+version       = "0.1.1"
 author        = "Anonymous"
-description   = "New Nimble project for Nim"
+description   = "Kinto Client for Nim"
 license       = "MIT"
 
 [Deps]

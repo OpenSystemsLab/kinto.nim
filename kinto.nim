@@ -10,50 +10,45 @@ type
   BucketNotFoundException* = KintoException
     ## Bucket not found or not accessible
 
-  KintoClient = object of RootObj
+  KintoClient = object
     remote: string
     headers: string
     bucket: string
     collection: string
     proxy: Proxy
 
-  Permissions = object of RootObj
+  Permissions {.final.} = object
     read*: seq[string]
     write*: seq[string]
     create*: seq[string]
 
-  BucketObj = object of RootObj
-    id: string
-    last_modified: int
-    permissions*: Permissions
-
-  CollectionObj = object of RootObj
-    id: string
-    last_modified: int
-    permissions*: Permissions
-
-  RecordObj = object of RootObj
-    id: string
-    last_modified: int
-    permissions*: Permissions
-
-  GroupObj = object of RootObj
-    id: string
-    last_modified: int
-    permissions*: Permissions
-    members: seq[string]
-
-  Bucket* = ref BucketObj
+  Bucket* {.final.} = object
     ## Kinto bucket instance
-  Collection* = ref CollectionObj
+    id: string
+    last_modified: int
+    permissions*: Permissions
+
+  Collection* {.final.} = object
     ## Kinto collection instance
-  Record* = ref RecordObj
+    id: string
+    last_modified: int
+    permissions*: Permissions
+
+  Record* = object of RootObj
     ## Kinto record instance
-  Group* = ref GroupObj
+    id: string
+    last_modified: int
+    permissions*: Permissions
+
+  Group* {.final.} = object
     ## Kinto group instance
+    id: string
+    last_modified: int
+    permissions*: Permissions
+    members*: seq[string]
 
 const
-  USER_AGENT = "kinto.nim/0.0.1"
+  USER_AGENT = "kinto.nim/0.0.2"
   DO_NOT_OVERWRITE = "If-None-Match: \"*\"\c\L"
 
   BATCH_ENDPOINT =        "/batch"
@@ -75,14 +70,17 @@ proc id*[T: Bucket|Collection|Record|Group](k: T): string {.inline.} =
   ## Getter of Object ID
   k.id
 
-proc newBuket(id = ""): Bucket =
-  new(result)
-  if not empty(id):
-    result.id = id
-
 proc lastModified*[T: Bucket|Collection|Record|Group](k: T): int {.inline.} =
   ## Getter of last modified
   k.lastModified
+
+proc newBuket*(id = ""): Bucket {.inline.} =
+  if not empty(id):
+    result.id = id
+
+proc newCollection*(id = ""): Collection {.inline.} =
+  if not empty(id):
+    result.id = id
 
 proc newPermissions(node: JsonNode = nil): Permissions =
   ## Create new permissions object
@@ -109,7 +107,7 @@ proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
   var
     v: string
     first = true
-  for name, value in self.fieldPairs:
+  for name, value in fieldPairs(self):
     when not (name in @["last_modified", "deleted", "permissions"]):
       v = value.dumps()
       if v != "null":
@@ -202,15 +200,11 @@ proc use*(self: var KintoClient, bucket: string) =
     raise newException(ValueError, "Bucket name is required")
   self.bucket = bucket
 
-proc collection*(self: KintoClient, collection: string): KintoClient =
+proc collection*(self: var KintoClient, collection: string) =
   ## Return a Kinto Client with new collection
   if collection.isNil or collection == "":
     raise newException(ValueError, "Collection name is required")
-
-  result.remote = self.remote
-  result.bucket = self.bucket
-  result.collection = collection
-  result.proxy = self.proxy
+  self.collection = collection
 
 proc getBuckets*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
   ## Returns the list of accessible buckets
@@ -220,36 +214,45 @@ proc getBuckets*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
     result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
 proc getCollections*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
-  ## Returns the list of accessible buckets
+  ## Returns the list of accessible collections
   result = @[]
   var node = self.request($httpGET, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
   for n in node["data"].items:
     result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
-proc get*[T: Bucket|Collection|Record|Group](self: KintoClient, id: string): T =
-  var endpoint: string
-  when T is Bucket:
-    endpoint = self.getEndpoint(BUCKET_ENDPOINT, id)
-  elif T is Collection:
-    endpoint = self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id)
-  elif T is Record:
-    endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id)
-  else:
-    raise newException(SystemError, "Invalid object type: " & type(T))
+proc getRecords*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
+  ## Returns the list of accessible records
+  result = @[]
+  var node = self.request($httpGET, self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
+  for n in node["data"].items:
+    result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
+proc get[T](self: KintoClient, endpoint: string): T =
   var node = self.request($httpGET, endpoint)
   result = toObj[T](node["data"])
   result.permissions = toObj[Permissions](node{}["permissions"])
 
-proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: T, safe = true, patch = false, forceOverwrite = false) =
+proc getBucket*(self: KintoClient, id: string): Bucket {.inline.} =
+  get[Bucket](self, self.getEndpoint(BUCKET_ENDPOINT, id))
+
+proc getCollection*(self: KintoClient, id: string): Collection {.inline.} =
+  get[Collection](self, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
+
+proc getRecord*[T: Record](self: KintoClient, id: string): T {.inline.} =
+  get[T](self, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+
+proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, updateOnly = true, forceOverwrite = false) =
+  ## Create or update an Kinto object
   var
     headers = ""
+    httpMethod: string
     endpoint: string
     node: JsonNode
 
   if not forceOverwrite:
     headers.add(DO_NOT_OVERWRITE)
   if empty(obj.id):
+    httpMethod = "httpPOST"
     when T is Bucket:
       endpoint = self.getEndpoint(BUCKETS_ENDPOINT)
     elif T is Collection:
@@ -259,22 +262,32 @@ proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: T, safe = 
     else:
       raise newException(SystemError, "Invalid object type: " & type(T))
   else:
+    if not updateOnly:
+      httpMethod = "httpPATCH"
+    else:
+      httpMethod = "httpPUT"
+
     when T is Bucket:
-      endpoint = self.getEndpoint(BUCKET_ENDPOINT, id)
+      endpoint = self.getEndpoint(BUCKET_ENDPOINT, obj.id)
     elif T is Collection:
-      endpoint = self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id)
+      endpoint = self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, obj.id)
     elif T is Record:
-      endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id)
+      endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, obj.id)
     else:
       raise newException(SystemError, "Invalid object type: " & type(T))
 
   headers.add(obj.getCacheHeaders(safe))
-  node = self.request($httpPUT, endpoint, %*obj, headers=headers)
+  node = self.request(httpMethod, endpoint, %*obj, headers=headers)
 
-  obj.lastModified = node["data"]["last_modified"].toInt
+  if empty(obj.id):
+    obj.id = node["data"]["id"].toStr
+    obj.lastModified = node{1}["last_modified"].toInt
+  else:
+    obj.lastModified = node["data"]["last_modified"].toInt
   obj.permissions = toObj[Permissions](node{}["permissions"])
 
-proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: T, safe = true, lastModified = 0) =
+proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, lastModified = 0) =
+  ## Drop a Kinto object
   var endpoint: string
   when T is Bucket:
     endpoint = self.getEndpoint(BUCKET_ENDPOINT, id)
@@ -288,14 +301,23 @@ proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: T, safe = 
   let headers = collection.getCacheHeaders(safe, lastModified=lastModified)
   discard self.request($httpDELETE, endpoint, headers=headers)
 
+proc dropBucket*(self: Kintoclient, id: string) =
+  discard self.request($httpDELETE, self.getEndpoint(BUCKET_ENDPOINT, id))
+
+proc dropCollection*(self: Kintoclient, id: string) =
+  discard self.request($httpDELETE, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
+
+proc dropRecord*(self: Kintoclient, id: string) =
+  discard self.request($httpDELETE, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+
 proc dropBuckets*(self: KintoClient) =
   discard self.request($httpDELETE, self.getEndpoint(BUCKETS_ENDPOINT))
 
 proc dropCollections*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(BUCKETS_ENDPOINT, self.bucket))
+  discard self.request($httpDELETE, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
 
 proc dropRecords*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(BUCKETS_ENDPOINT, self.bucket, self.collection))
+  discard self.request($httpDELETE, self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
 
 proc dropGroups*(self: KintoClient) =
   discard self.request($httpDELETE, self.getEndpoint(GROUPS_ENDPOINT, self.bucket))
