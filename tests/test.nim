@@ -5,26 +5,26 @@ type
     north, east, south, west
 
 type
-  Todo = object of Collection
+  Todo = ref object of Collection
     description: string
     bits: uint32
     dir: Direction
 
-  Task = object of Record
+  Task = ref object of Record
     title: string
     done: bool
 
+var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "default") #, proxy=("http://192.168.1.16:8888"))
 
-var db = Kinto("http://ss.huy.im/v1", "kinto", "s3cret", "todo") #, proxy=("http://192.168.1.16:8888"))
+for c in db.getCollections():
+  echo get[Todo](db, c.id).id
 
-var todo: Todo
-todo.description = "Fuck yeah!"
-db.save(todo)
+db.dropCollections()
+#var todo: Todo
+#todo.description = "Fuck yeah!"
+#db.save(todo)
 
-var t1: Task
-t1
-.title = "Finish API"
-
-db.save(t1)
-
-echo get[Task](db, t1.id)
+#var t1: Task
+#t1.title = "Finish API"
+#db.save(t1)
+#echo get[Task](db, t1.id)
