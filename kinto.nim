@@ -82,25 +82,6 @@ proc newCollection*(id = ""): Collection {.inline.} =
   if not empty(id):
     result.id = id
 
-proc newPermissions(node: JsonNode = nil): Permissions =
-  ## Create new permissions object
-  result.read = @[]
-  result.write = @[]
-  result.create = @[]
-
-  if node != nil:
-    if node.hasKey("read"):
-      for perm in node["read"].items:
-        result.read.add(perm.toStr)
-
-    if node.hasKey("write"):
-      for perm in node["write"].items:
-        result.write.add(perm.toStr)
-
-    if node.hasKey("create"):
-      for perm in node["create"].items:
-        result.create.add(perm.toStr)
-
 proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
   result = newStringOfCap(sizeof(self) shl 1)
   result.add "{\"data\":{"
