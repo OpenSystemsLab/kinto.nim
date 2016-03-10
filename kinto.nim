@@ -1,21 +1,60 @@
-import httpclient, strutils, uri, base64, logging, typetraits, macros, ../sam.nim/sam
+import httpclient, strutils, uri, base64, logging, typetraits, macros, strtabs, ../sam.nim/sam
+from json import escapeJson
 import private/util
 
 type
+
+  HTTP_METHOD = enum
+    UNKNOWN
+    GET
+    POST
+    PUT
+    PATCH
+    DELETE
+
+
   KintoException* = object of Exception
     ## Errors returned by server
-    response*: Response
+    response*: httpclient.Response
       ## responsed packet
 
   BucketNotFoundException* = KintoException
     ## Bucket not found or not accessible
 
+  Settings = object
+    readonly: bool
+    batch_max_requests: int
+
   KintoClient = object
     remote: string
-    headers: string
+    headers: StringTableRef
     bucket: string
     collection: string
     proxy: Proxy
+    settings: Settings
+
+  Request = object
+    httpMethod: HTTP_METHOD
+    path: string
+    data: string
+    perms: string
+    headers: StringTableRef
+
+  Body* = tuple
+    permissions: Permissions
+    data: JsonNode
+
+  Response* = object
+    path*: string
+    status*: int
+    body*: Body
+    headers*: JsonNode
+
+  KintoBatchClient = ref object
+    client: KintoClient
+    default: Request
+    requests: seq[Request]
+
 
   Permissions* {.final.} = object
     read*: seq[string]
@@ -49,12 +88,12 @@ type
 
 const
   USER_AGENT = "kinto.nim/0.1.1"
-  DO_NOT_OVERWRITE = "If-None-Match: \"*\"\c\L"
 
+  ROOT_ENDPOINT =         "/"
   BATCH_ENDPOINT =        "/batch"
   BUCKETS_ENDPOINT =      "/buckets"
   BUCKET_ENDPOINT =       "/buckets/$#"
-  COLLECTIONS_ENDPOINT =   "/buckets/$#/collections"
+  COLLECTIONS_ENDPOINT =  "/buckets/$#/collections"
   COLLECTION_ENDPOINT =   "/buckets/$#/collections/$#"
   RECORDS_ENDPOINT =      "/buckets/$#/collections/$#/records"
   RECORD_ENDPOINT =       "/buckets/$#/collections/$#/records/$#"
@@ -65,6 +104,10 @@ const
 when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
+
+proc `%`(m: HTTP_METHOD): string =
+  "http" & $m
+
 
 proc id*[T: Bucket|Collection](k: T): string {.inline.} =
   ## Getter of Object ID
@@ -82,9 +125,9 @@ proc newCollection*(id = ""): Collection {.inline.} =
   if not empty(id):
     result.id = id
 
-proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
+proc `$`[T: Bucket|Collection|Record|Group](self: T): string =
   result = newStringOfCap(sizeof(self) shl 1)
-  result.add "{\"data\":{"
+  result.add "{"
   var
     v: string
     first = true
@@ -99,35 +142,47 @@ proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
 
         result.add "\"" & name & "\":"
         result.add v
-  result.add "}}"
+  result.add "}"
 
-proc Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: tuple[url: string, auth: string]): KintoClient =
-  ## Create new Kinto API client with proxy configurated
-  result.remote = strip(remote, leading = false, chars={'/'})
-  result.headers = "Content-Type: application/json\c\LAccept: application/json\c\L"
-  if username != "":
-    result.headers.add("Authorization: basic " & encode(username & ":" & password) & "\c\L")
+proc `%`(req: Request): JsonRaw {.inline.} =
+  var first = true
+  var ret = "{"
+  if req.httpMethod == UNKNOWN:
+    ret.add "\"method\":\"POST\""
+  else:
+    ret.add "\"method\":\"" & $req.httpMethod & "\""
+  if not empty(req.path):
+    ret.add ",\"path\":"
+    ret.add escapeJson(req.path)
+  if not req.headers.isNil and len(req.headers) > 0:
+    ret.add ",\"headers\":{"
+    for k, v in req.headers.pairs():
+      if first:
+        first = false
+      else:
+        ret.add ","
+      ret.add escapeJson(k) & ":" & escapeJson(v)
+    ret.add "}"
+  if not empty(req.data) or not empty(req.perms):
+    ret.add ",\"body\":{"
+    if not empty(req.data):
+      ret.add "\"data\":"
+      ret.add req.data
+    if not empty(req.perms):
+      if not empty(req.data):
+        ret.add ","
+      ret.add "\"permissions\":"
+      ret.add req.perms
+    ret.add "}"
 
-  result.bucket = bucket
-  result.collection = collection
+  ret.add "}"
+  (JsonRaw)ret
 
-  if proxy[0] != "":
-    result.proxy = newProxy(proxy[0], proxy[1])
-
-template Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: string): expr =
-  ## Create new Kinto API client with proxy that not requires authentication
-  Kinto(remote, username, password, bucket, collection, (proxy, ""))
-
-template Kinto*(remote: string, username, password = "", bucket = "default", collection = ""): expr =
-  ## Create new Kinto API client
-  Kinto(remote, username, password, bucket, collection, ("", ""))
-
-
-proc getEndpoint(self: KintoClient, kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
+proc getEndpoint(kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
   kind % [a, b, c]
 
 
-proc request(self: KintoClient, httpMethod, endpoint: string, data, perms = "", headers = ""): JsonNode =
+proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil): JsonNode =
   let parsed = parseUri(endpoint)
   var actualUrl: string
   if parsed.scheme == "":
@@ -136,9 +191,12 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, perms = "", 
     actualUrl = endpoint
 
   var extraHeaders = ""
-  extraHeaders.add(self.headers)
-  if headers != nil:
-    extraHeaders.add(headers)
+  if not self.headers.isNil and self.headers.len > 0:
+    for k, v in self.headers.pairs():
+      extraHeaders.add k & ": " & v & "\c\L"
+  if not headers.isNil and headers.len > 0:
+    for k, v in self.headers.pairs():
+      extraHeaders.add k & ": " & v & "\c\L"
 
   let payload = if data.isNil: "" else: $data
   extraHeaders.add("Content-Length: " & $len(payload) & "\c\L")
@@ -149,7 +207,7 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, perms = "", 
   debug(payload)
 
   let response = request(actualUrl,
-                         httpMethod,
+                         %httpMethod,
                          extraHeaders,
                          payload,
                          userAgent=USER_AGENT,
@@ -166,14 +224,39 @@ proc request(self: KintoClient, httpMethod, endpoint: string, data, perms = "", 
     error.response = response
     raise error
 
-proc getCacheHeaders[T: Bucket|Collection|Record|Group](self: T, safe: bool, lastModified = 0): string =
-  result = ""
+proc Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: tuple[url: string, auth: string]): KintoClient =
+  ## Create new Kinto API client with proxy configurated
+  result.remote = strip(remote, leading = false, chars={'/'})
+  result.headers = newStringTable({"Content-Type": "application/json", "Accept": "application/json"}, modeCaseInsensitive)
+  if username != "":
+    result.headers["Authorization"] = "basic " & encode(username & ":" & password)
+
+  result.bucket = bucket
+  result.collection = collection
+
+  if proxy[0] != "":
+    result.proxy = newProxy(proxy[0], proxy[1])
+
+  let ret = result.request(GET, result.remote & ROOT_ENDPOINT)
+  result.settings = toObj[Settings](ret["settings"])
+
+
+template Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: string): expr =
+  ## Create new Kinto API client with proxy that not requires authentication
+  Kinto(remote, username, password, bucket, collection, (proxy, ""))
+
+template Kinto*(remote: string, username, password = "", bucket = "default", collection = ""): expr =
+  ## Create new Kinto API client
+  Kinto(remote, username, password, bucket, collection, ("", ""))
+
+
+proc getCacheHeaders[T: Bucket|Collection|Record|Group](self: T, headers: StringTableRef, safe: bool, lastModified = 0) =
   if safe:
     var lastModified = lastModified
     if lastModified == 0 and self.lastModified > 0:
       lastModified = self.lastModified
     if lastModified != 0:
-      result = "If-Match: \"" & $lastModified & "\"\c\L"
+      headers["If-Match"] = "\"" & $lastModified & "\""
 
 proc use*(self: var KintoClient, bucket: string) =
   ## Switch to other bucket
@@ -190,75 +273,76 @@ proc collection*(self: var KintoClient, collection: string) =
 proc getBuckets*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
   ## Returns the list of accessible buckets
   result = @[]
-  var node = self.request($httpGET, self.getEndpoint(BUCKETS_ENDPOINT))
+  var node = self.request(GET, getEndpoint(BUCKETS_ENDPOINT))
   for n in node["data"].items:
     result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
 proc getCollections*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
   ## Returns the list of accessible collections
   result = @[]
-  var node = self.request($httpGET, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
+  var node = self.request(GET, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
   for n in node["data"].items:
     result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
 proc getRecords*(self: KintoClient): seq[tuple[id: string, lastModified: int]] =
   ## Returns the list of accessible records
   result = @[]
-  var node = self.request($httpGET, self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
+  var node = self.request(GET, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
   for n in node["data"].items:
     result.add((id: n["id"].toStr, lastModified: n{1}["last_modified"].toInt))
 
 proc get[T](self: KintoClient, endpoint: string): T =
-  var node = self.request($httpGET, endpoint)
+  var node = self.request(GET, endpoint)
   result = toObj[T](node["data"])
   result.permissions = toObj[Permissions](node{}["permissions"])
 
 proc getBucket*(self: KintoClient, id: string): Bucket =
-  get[Bucket](self, self.getEndpoint(BUCKET_ENDPOINT, id))
+  get[Bucket](self, getEndpoint(BUCKET_ENDPOINT, id))
 
 proc getCollection*(self: KintoClient, id: string): Collection =
-  get[Collection](self, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
+  get[Collection](self, getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
 
 proc getRecord*[T: Record](self: KintoClient, id: string): T =
-  get[T](self, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+  get[T](self, getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
 
 proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, updateOnly = true, forceOverwrite = false) =
   ## Create or update an Kinto object
   var
-    headers = ""
-    httpMethod: string
+    headers = newStringTable()
+    httpMethod: HTTP_METHOD
     endpoint: string
     node: JsonNode
 
   if not forceOverwrite:
-    headers.add(DO_NOT_OVERWRITE)
+    headers["If-None-Match"] = "\"*\""
+
   if empty(obj.id):
-    httpMethod = "httpPOST"
+    httpMethod = POST
     when T is Bucket:
-      endpoint = self.getEndpoint(BUCKETS_ENDPOINT)
+      endpoint = getEndpoint(BUCKETS_ENDPOINT)
     elif T is Collection:
-      endpoint = self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket)
+      endpoint = getEndpoint(COLLECTIONS_ENDPOINT, self.bucket)
     elif T is Record:
-      endpoint = self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection)
+      endpoint = getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection)
     else:
       raise newException(SystemError, "Invalid object type: " & type(T))
   else:
     if not updateOnly:
-      httpMethod = "httpPATCH"
+      httpMethod = PATCH
     else:
-      httpMethod = "httpPUT"
+      httpMethod = PUT
 
     when T is Bucket:
-      endpoint = self.getEndpoint(BUCKET_ENDPOINT, obj.id)
+      endpoint = getEndpoint(BUCKET_ENDPOINT, obj.id)
     elif T is Collection:
-      endpoint = self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, obj.id)
+      endpoint = getEndpoint(COLLECTION_ENDPOINT, self.bucket, obj.id)
     elif T is Record:
-      endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, obj.id)
+      endpoint = getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, obj.id)
     else:
       raise newException(SystemError, "Invalid object type: " & type(T))
 
-  headers.add(obj.getCacheHeaders(safe))
-  node = self.request(httpMethod, endpoint, %*obj, headers=headers)
+  obj.getCacheHeaders(headers, safe)
+  node = self.request(httpMethod, endpoint, $obj, headers=headers)
 
   if empty(obj.id):
     obj.id = node["data"]["id"].toStr
@@ -269,36 +353,176 @@ proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, saf
 
 proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, lastModified = 0) =
   ## Drop a Kinto object
-  var endpoint: string
+  var
+    headers = newStringTable()
+    endpoint: string
   when T is Bucket:
-    endpoint = self.getEndpoint(BUCKET_ENDPOINT, id)
+    endpoint = getEndpoint(BUCKET_ENDPOINT, id)
   elif T is Collection:
-    endpoint = self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id)
+    endpoint = getEndpoint(COLLECTION_ENDPOINT, self.bucket, id)
   elif T is Record:
-    endpoint = self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id)
+    endpoint = getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id)
   else:
     raise newException(SystemError, "Invalid object type: " & type(T))
 
-  let headers = collection.getCacheHeaders(safe, lastModified=lastModified)
-  discard self.request($httpDELETE, endpoint, headers=headers)
+  collection.getCacheHeaders(headers, safe, lastModified=lastModified)
+  discard self.request(DELETE, endpoint, headers=headers)
 
 proc dropBucket*(self: Kintoclient, id: string) =
-  discard self.request($httpDELETE, self.getEndpoint(BUCKET_ENDPOINT, id))
+  discard self.request(DELETE, getEndpoint(BUCKET_ENDPOINT, id))
 
 proc dropCollection*(self: Kintoclient, id: string) =
-  discard self.request($httpDELETE, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
+  discard self.request(DELETE, getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
 
 proc dropRecord*(self: Kintoclient, id: string) =
-  discard self.request($httpDELETE, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+  discard self.request(DELETE, getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
 
 proc dropBuckets*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(BUCKETS_ENDPOINT))
+  discard self.request(DELETE, getEndpoint(BUCKETS_ENDPOINT))
 
 proc dropCollections*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
+  discard self.request(DELETE, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
 
 proc dropRecords*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
+  discard self.request(DELETE, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
 
 proc dropGroups*(self: KintoClient) =
-  discard self.request($httpDELETE, self.getEndpoint(GROUPS_ENDPOINT, self.bucket))
+  discard self.request(DELETE, getEndpoint(GROUPS_ENDPOINT, self.bucket))
+
+proc batch*(self: KintoClient, httpMethod = POST, path = "", headers: StringTableRef = nil): KintoBatchClient =
+  new(result)
+  result.client = self
+  result.default.httpMethod = httpMethod
+  result.default.path = path
+  result.default.headers = headers
+  result.requests = @[]
+
+proc request(self: KintoBatchClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil) =
+  var req: Request
+  req.httpMethod = httpMethod
+  req.path = endpoint
+  req.data = data
+  req.perms = perms
+  req.headers = headers
+
+  self.requests.add(req)
+
+proc send*(self: KintoBatchClient): seq[Response] =
+  result = @[]
+  var
+    requests: seq[JsonRaw] = @[]
+
+  for i in 0..<self.requests.len:
+    requests.add %self.requests[i]
+
+    if requests.len >= self.requests.len or  requests.len >= self.client.settings.batch_max_requests:
+      var data = $${
+        "default": %self.default,
+        "requests": requests
+      }
+      requests = @[]
+      # XXX send batch
+      var node = self.client.request(POST, getEndpoint(BATCH_ENDPOINT), data)
+      for n in node["responses"].items:
+        var resp = toObj[Response](n)
+        result.add(resp)
+
+proc getBuckets*(self: KintoBatchClient) =
+  ## Returns the list of accessible buckets
+  self.request(GET, getEndpoint(BUCKETS_ENDPOINT))
+
+proc getCollections*(self: KintoBatchClient) =
+  ## Returns the list of accessible collections
+  self.request(GET, getEndpoint(COLLECTIONS_ENDPOINT, self.client.bucket))
+
+proc getRecords*(self: KintoBatchClient) =
+  ## Returns the list of accessible records
+  self.request(GET, getEndpoint(RECORDS_ENDPOINT, self.client.bucket, self.client.collection))
+
+proc get(self: KintoBatchClient, endpoint: string) =
+  self.request(GET, endpoint)
+
+proc getBucket*(self: KintoBatchClient, id: string) =
+  get(self, getEndpoint(BUCKET_ENDPOINT, id))
+
+proc getCollection*(self: KintoBatchClient, id: string) =
+  get(self, getEndpoint(COLLECTION_ENDPOINT, self.client.bucket, id))
+
+proc getRecord*[T: Record](self: KintoBatchClient, id: string) =
+  get(self, getEndpoint(RECORD_ENDPOINT, self.client.bucket, self.client.collection, id))
+
+proc save*[T: Bucket|Collection|Record|Group](self: KintoBatchClient, obj: var T, safe = true, updateOnly = true, forceOverwrite = false) =
+  ## Create or update an Kinto object
+  var
+    headers = newStringTable()
+    httpMethod: HTTP_METHOD
+    endpoint: string
+    node: JsonNode
+
+  if not forceOverwrite:
+    headers["If-None-Match"] = "\"*\""
+  if empty(obj.id):
+    httpMethod = POST
+    when T is Bucket:
+      endpoint = getEndpoint(BUCKETS_ENDPOINT)
+    elif T is Collection:
+      endpoint = getEndpoint(COLLECTIONS_ENDPOINT, self.client.bucket)
+    elif T is Record:
+      endpoint = getEndpoint(RECORDS_ENDPOINT, self.client.bucket, self.client.collection)
+    else:
+      raise newException(SystemError, "Invalid object type: " & type(T))
+  else:
+    if not updateOnly:
+      httpMethod = PATCH
+    else:
+      httpMethod = PUT
+
+    when T is Bucket:
+      endpoint = getEndpoint(BUCKET_ENDPOINT, obj.id)
+    elif T is Collection:
+      endpoint = getEndpoint(COLLECTION_ENDPOINT, self.client.bucket, obj.id)
+    elif T is Record:
+      endpoint = getEndpoint(RECORD_ENDPOINT, self.client.bucket, self.client.collection, obj.id)
+    else:
+      raise newException(SystemError, "Invalid object type: " & type(T))
+
+  obj.getCacheHeaders(headers, safe)
+  self.request(httpMethod, endpoint, obj.dumps(), headers=headers)
+
+proc drop*[T: Bucket|Collection|Record|Group](self: KintoBatchClient, obj: var T, safe = true, lastModified = 0) =
+  ## Drop a Kinto object
+  var
+    headers = newStringTable()
+    endpoint: string
+  when T is Bucket:
+    endpoint = getEndpoint(BUCKET_ENDPOINT, id)
+  elif T is Collection:
+    endpoint = getEndpoint(COLLECTION_ENDPOINT, self.client.bucket, id)
+  elif T is Record:
+    endpoint = getEndpoint(RECORD_ENDPOINT, self.client.bucket, self.client.collection, id)
+  else:
+    raise newException(SystemError, "Invalid object type: " & type(T))
+
+  collection.getCacheHeaders(headers,safe, lastModified=lastModified)
+  self.request(DELETE, endpoint, headers=headers)
+
+proc dropBucket*(self: KintoBatchClient, id: string) =
+  self.request(DELETE, getEndpoint(BUCKET_ENDPOINT, id))
+
+proc dropCollection*(self: KintoBatchClient, id: string) =
+  self.request(DELETE, getEndpoint(COLLECTION_ENDPOINT, self.client.bucket, id))
+
+proc dropRecord*(self: KintoBatchClient, id: string) =
+  self.request(DELETE, getEndpoint(RECORD_ENDPOINT, self.client.bucket, self.client.collection, id))
+
+proc dropBuckets*(self: KintoBatchClient) =
+  self.request(DELETE, getEndpoint(BUCKETS_ENDPOINT))
+
+proc dropCollections*(self: KintoBatchClient) =
+  self.request(DELETE, getEndpoint(COLLECTIONS_ENDPOINT, self.client.bucket))
+
+proc dropRecords*(self: KintoBatchClient) =
+  self.request(DELETE, getEndpoint(RECORDS_ENDPOINT, self.client.bucket, self.client.collection))
+
+proc dropGroups*(self: KintoBatchClient) =
+  self.request(DELETE, getEndpoint(GROUPS_ENDPOINT, self.client.bucket))
