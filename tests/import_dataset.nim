@@ -14,8 +14,9 @@ var
 #db.save(newCollection("restaurants"))
 db.collection("restaurants")
 db.dropRecords()
-var r: Restaurant
 
+var r: Restaurant
 for js in lines("dataset.json"):
+  r.id = nil
   r.loads(js)
   db.save(r)
