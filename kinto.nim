@@ -17,7 +17,7 @@ type
     collection: string
     proxy: Proxy
 
-  Permissions {.final.} = object
+  Permissions* {.final.} = object
     read*: seq[string]
     write*: seq[string]
     create*: seq[string]
@@ -36,8 +36,8 @@ type
 
   Record* = object of RootObj
     ## Kinto record instance
-    id: string
-    last_modified: int
+    id*: string
+    last_modified*: int
     permissions*: Permissions
 
   Group* {.final.} = object
@@ -66,11 +66,11 @@ when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
 
-proc id*[T: Bucket|Collection|Record|Group](k: T): string {.inline.} =
+proc id*[T: Bucket|Collection](k: T): string {.inline.} =
   ## Getter of Object ID
   k.id
 
-proc lastModified*[T: Bucket|Collection|Record|Group](k: T): int {.inline.} =
+proc lastModified*[T: Bucket|Collection](k: T): int {.inline.} =
   ## Getter of last modified
   k.lastModified
 
@@ -90,7 +90,7 @@ proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
     first = true
   for name, value in fieldPairs(self):
     when not (name in @["last_modified", "deleted", "permissions"]):
-      v = value.dumps()
+      v = dumps(value)
       if v != "null":
         if first:
           first = false
@@ -98,7 +98,7 @@ proc `%*`[T: Bucket|Collection|Record|Group](self: T): string =
           result.add ","
 
         result.add "\"" & name & "\":"
-        result.add value.dumps()
+        result.add v
   result.add "}}"
 
 proc Kinto*(remote: string, username, password = "", bucket = "default", collection = "", proxy: tuple[url: string, auth: string]): KintoClient =
@@ -213,13 +213,13 @@ proc get[T](self: KintoClient, endpoint: string): T =
   result = toObj[T](node["data"])
   result.permissions = toObj[Permissions](node{}["permissions"])
 
-proc getBucket*(self: KintoClient, id: string): Bucket {.inline.} =
+proc getBucket*(self: KintoClient, id: string): Bucket =
   get[Bucket](self, self.getEndpoint(BUCKET_ENDPOINT, id))
 
-proc getCollection*(self: KintoClient, id: string): Collection {.inline.} =
+proc getCollection*(self: KintoClient, id: string): Collection =
   get[Collection](self, self.getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
 
-proc getRecord*[T: Record](self: KintoClient, id: string): T {.inline.} =
+proc getRecord*[T: Record](self: KintoClient, id: string): T =
   get[T](self, self.getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
 
 proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, updateOnly = true, forceOverwrite = false) =
