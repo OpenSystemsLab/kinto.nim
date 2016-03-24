@@ -125,7 +125,7 @@ proc newCollection*(id = ""): Collection {.inline.} =
   if not empty(id):
     result.id = id
 
-proc `$`[T: Bucket|Collection|Record|Group](self: T): string =
+proc `%%`[T: Bucket|Collection|Record|Group](self: T): string =
   result = newStringOfCap(sizeof(self) shl 1)
   result.add "{"
   var
@@ -411,6 +411,7 @@ proc send*(self: KintoBatchClient): seq[Response] =
   result = @[]
   var
     requests: seq[JsonRaw] = @[]
+    tmp = newSeq[Response](self.client.settings.batch_max_requests)
 
   for i in 0..<self.requests.len:
     requests.add %self.requests[i]
@@ -421,11 +422,9 @@ proc send*(self: KintoBatchClient): seq[Response] =
         "requests": requests
       }
       requests = @[]
-      # XXX send batch
       var node = self.client.request(POST, getEndpoint(BATCH_ENDPOINT), data)
-      for n in node["responses"].items:
-        var resp = toObj[Response](n)
-        result.add(resp)
+      tmp.loads(node["responses"])
+      result.add(tmp)
 
 proc getBuckets*(self: KintoBatchClient) =
   ## Returns the list of accessible buckets
@@ -487,7 +486,7 @@ proc save*[T: Bucket|Collection|Record|Group](self: KintoBatchClient, obj: var T
       raise newException(SystemError, "Invalid object type: " & type(T))
 
   obj.getCacheHeaders(headers, safe)
-  self.request(httpMethod, endpoint, obj.dumps(), headers=headers)
+  self.request(httpMethod, endpoint, %%obj, headers=headers)
 
 proc drop*[T: Bucket|Collection|Record|Group](self: KintoBatchClient, obj: var T, safe = true, lastModified = 0) =
   ## Drop a Kinto object
