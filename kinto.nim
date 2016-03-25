@@ -48,7 +48,7 @@ type
     path*: string
     status*: int
     body*: Body
-    headers*: JsonNode
+    headers*: StringTableRef
 
   KintoBatchClient = ref object
     client: KintoClient

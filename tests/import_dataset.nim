@@ -2,7 +2,7 @@ import ../kinto, ../../sam.nim/sam
 
 type
   Restaurant = object of Record
-    address: tuple[building: string, coord: array[2, float], street: string, zipcode: int]
+    address: tuple[building: string, coord: array[2, float], street: string, zipcode: string]
     borough: string
     cuisine: string
     grades: seq[tuple[date: int, grade: char, score: int]]
@@ -13,7 +13,7 @@ var
 
 #db.save(newCollection("restaurants"))
 db.collection("restaurants")
-#db.dropRecords()
+db.dropRecords()
 var batch = db.batch()
 for js in lines("dataset.json"):
   try:
@@ -23,5 +23,4 @@ for js in lines("dataset.json"):
     batch.save(r)
   except ValueError:
     discard
-
 discard batch.send()
