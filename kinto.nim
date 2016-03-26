@@ -158,15 +158,24 @@ proc getEndpoint(kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
   kind % [a, b, c]
 
 
-proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil): (JsonNode, StringTableRef) =
+proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil, limit = 0): (JsonNode, StringTableRef) =
   let parsed = parseUri(endpoint)
-  var actualUrl: string
+  var
+    actualUrl: string
+    queryString = ""
+    extraHeaders = ""
+
   if parsed.scheme == "":
     actualUrl = self.remote & endpoint
   else:
     actualUrl = endpoint
 
-  var extraHeaders = ""
+  if limit != 0:
+    queryString.add("_limit=" & $limit)
+
+  if queryString != "":
+    actualUrl.add("?" & queryString)
+
   if not self.headers.isNil and self.headers.len > 0:
     for k, v in self.headers.pairs():
       extraHeaders.add k & ": " & v & "\c\L"
@@ -190,6 +199,7 @@ proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data,
                          proxy=self.proxy)
 
   debug("Status: ", response.status)
+  debug("Headers: ", $response.headers)
   debug("Body: ", response.body)
 
   let node = parse(response.body)
@@ -249,10 +259,10 @@ proc collection*(self: var KintoClient, collection: string) =
   self.collection = collection
 
 
-proc getBuckets*(self: KintoClient): seq[Bucket] =
+proc getBuckets*(self: KintoClient, limit = 0): seq[Bucket] =
   ## Returns the list of accessible buckets
   result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(BUCKETS_ENDPOINT))
+  var (node, headers) = self.request(GET, getEndpoint(BUCKETS_ENDPOINT), limit=limit)
   for n in node["data"].items:
     result.add toObj[Bucket](n)
   while headers.hasKey("next-page"):
@@ -261,10 +271,10 @@ proc getBuckets*(self: KintoClient): seq[Bucket] =
       result.add toObj[Bucket](n)
 
 
-proc getCollections*(self: KintoClient): seq[Collection] =
+proc getCollections*(self: KintoClient, limit = 0): seq[Collection] =
   ## Returns the list of accessible collections
   result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
+  var (node, headers) = self.request(GET, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket), limit=limit)
   for n in node["data"].items:
     result.add toObj[Collection](n)
   while headers.hasKey("next-page"):
@@ -272,10 +282,10 @@ proc getCollections*(self: KintoClient): seq[Collection] =
     for n in node["data"].items:
       result.add toObj[Collection](n)
 
-proc getRecords*[T: Record](self: KintoClient): seq[T] =
+proc getRecords*[T: Record](self: KintoClient, limit = 0): seq[T] =
   ## Returns the list of accessible records
   result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
+  var (node, headers) = self.request(GET, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection), limit=limit)
   for n in node["data"].items:
     result.add toObj[T](n)
   while headers.hasKey("next-page"):

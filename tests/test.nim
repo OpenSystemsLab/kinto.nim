@@ -11,5 +11,5 @@ type
 var db = Kinto("https://ss.huy.im/v1", "kinto", "s3cret", "default") #, proxy=("http://192.168.1.16:8888"))
 db.collection("restaurants")
 
-for r in db.getCollections():
-  echo r
+for r in getRecords[Restaurant](db):
+  echo r.name
