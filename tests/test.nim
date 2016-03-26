@@ -2,7 +2,7 @@ import ../kinto
 
 type
   Restaurant = object of Record
-    address: tuple[building: string, coord: array[2, float], street: string, zipcode: int]
+    address: tuple[building: string, coord: array[2, float], street: string, zipcode: string]
     borough: string
     cuisine: string
     grades: seq[tuple[date: int, grade: char, score: int]]
@@ -11,8 +11,5 @@ type
 var db = Kinto("https://ss.huy.im/v1", "kinto", "s3cret", "default") #, proxy=("http://192.168.1.16:8888"))
 db.collection("restaurants")
 
-var batch = db.batch(path = "/v0/articles")
-batch.getBucket("default")
-discard batch.send()
-#for r in db.getRecords():
-#  echo r
+for r in db.getCollections():
+  echo r
