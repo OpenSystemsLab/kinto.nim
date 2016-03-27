@@ -8,8 +8,8 @@ type
     grades: seq[tuple[date: int, grade: char, score: int]]
     name: string
 
-var db = Kinto("https://ss.huy.im/v1", "kinto", "s3cret", "default") #, proxy=("http://192.168.1.16:8888"))
-db.collection("restaurants")
+var db = Kinto("https://ss.huy.im/v1", "kinto", "s3cret", "default")
 
-for r in getRecords[Restaurant](db):
-  echo r.name
+
+for r in Restaurant.query(db, "restaurants").exclude("name", "").sort("last_modified").all():
+  echo r.id

@@ -1,7 +1,7 @@
 [Package]
 name          = "Kinto"
-version       = "0.1.1"
-author        = "Anonymous"
+version       = "0.2.0"
+author        = "Huy Doan"
 description   = "Kinto Client for Nim"
 license       = "MIT"
 

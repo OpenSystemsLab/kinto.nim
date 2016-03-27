@@ -1,36 +1,21 @@
-import httpclient, strutils, uri, base64, logging, typetraits, macros, strtabs, ../sam.nim/sam
+import strutils, uri, base64, logging, typetraits, macros, strtabs, ../sam.nim/sam
+import httpclient except httpMethod
 from json import escapeJson
-import private/util
-import private/exception
+import private/defines, private/util, private/exception
 export KintoException, BucketNotFoundException
 
 type
-  HTTP_METHOD = enum
-    UNKNOWN
-    GET
-    POST
-    PUT
-    PATCH
-    DELETE
+  Settings* = object
+    readonly*: bool
+    batch_max_requests*: int
 
-  Settings = object
-    readonly: bool
-    batch_max_requests: int
-
-  KintoClient = object
+  KintoClient* = object
     remote: string
     headers: StringTableRef
     bucket: string
     collection: string
     proxy: Proxy
-    settings: Settings
-
-  Request = object
-    httpMethod: HTTP_METHOD
-    path: string
-    data: string
-    perms: string
-    headers: StringTableRef
+    settings*: Settings
 
   Permissions* {.final.} = object
     read*: seq[string]
@@ -62,27 +47,15 @@ type
     permissions*: Permissions
     members*: seq[string]
 
-const
-  USER_AGENT = "kinto.nim/0.1.2 (https://github.com/OpenSystemsLab/kinto.nim)"
-
-  ROOT_ENDPOINT =         "/"
-  BATCH_ENDPOINT =        "/batch"
-  BUCKETS_ENDPOINT =      "/buckets"
-  BUCKET_ENDPOINT =       "/buckets/$#"
-  COLLECTIONS_ENDPOINT =  "/buckets/$#/collections"
-  COLLECTION_ENDPOINT =   "/buckets/$#/collections/$#"
-  RECORDS_ENDPOINT =      "/buckets/$#/collections/$#/records"
-  RECORD_ENDPOINT =       "/buckets/$#/collections/$#/records/$#"
-  GROUPS_ENDPOINT =       "/buckets/$#/groups"
-  GROUP_ENDPOINT =        "/buckets/$#/groups/$#"
+  Query[T] = ref object
+    client: KintoClient
+    endpoint: string
+    filters: seq[string]
 
 
 when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
-
-proc `%`(m: HTTP_METHOD): string =
-  "http" & $m
 
 
 proc id*[T: Bucket|Collection](k: T): string {.inline.} =
@@ -101,7 +74,7 @@ proc newCollection*(id = ""): Collection {.inline.} =
   if not empty(id):
     result.id = id
 
-proc `%%`[T: Bucket|Collection|Record|Group](self: T): string =
+proc `%%`*[T: Bucket|Collection|Record|Group](self: T): string =
   result = newStringOfCap(sizeof(self) shl 1)
   result.add "{"
   var
@@ -120,49 +93,10 @@ proc `%%`[T: Bucket|Collection|Record|Group](self: T): string =
         result.add v
   result.add "}"
 
-proc `%`(req: Request): JsonRaw {.inline.} =
-  var first = true
-  var ret = "{"
-  if req.httpMethod == UNKNOWN:
-    ret.add "\"method\":\"POST\""
-  else:
-    ret.add "\"method\":\"" & $req.httpMethod & "\""
-  if not empty(req.path):
-    ret.add ",\"path\":"
-    ret.add escapeJson(req.path)
-  if not req.headers.isNil and len(req.headers) > 0:
-    ret.add ",\"headers\":{"
-    for k, v in req.headers.pairs():
-      if first:
-        first = false
-      else:
-        ret.add ","
-      ret.add escapeJson(k) & ":" & escapeJson(v)
-    ret.add "}"
-  if not empty(req.data) or not empty(req.perms):
-    ret.add ",\"body\":{"
-    if not empty(req.data):
-      ret.add "\"data\":"
-      ret.add req.data
-    if not empty(req.perms):
-      if not empty(req.data):
-        ret.add ","
-      ret.add "\"permissions\":"
-      ret.add req.perms
-    ret.add "}"
-
-  ret.add "}"
-  (JsonRaw)ret
-
-proc getEndpoint(kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
-  kind % [a, b, c]
-
-
-proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil, limit = 0): (JsonNode, StringTableRef) =
+proc request*(self: KintoClient, httpMethod: httpMethod, endpoint: string, data, perms = "", headers: StringTableRef = nil, query = ""): (JsonNode, StringTableRef) =
   let parsed = parseUri(endpoint)
   var
     actualUrl: string
-    queryString = ""
     extraHeaders = ""
 
   if parsed.scheme == "":
@@ -170,11 +104,8 @@ proc request(self: KintoClient, httpMethod: HTTP_METHOD, endpoint: string, data,
   else:
     actualUrl = endpoint
 
-  if limit != 0:
-    queryString.add("_limit=" & $limit)
-
-  if queryString != "":
-    actualUrl.add("?" & queryString)
+  if query != "":
+    actualUrl.add("?" & query)
 
   if not self.headers.isNil and self.headers.len > 0:
     for k, v in self.headers.pairs():
@@ -258,61 +189,124 @@ proc collection*(self: var KintoClient, collection: string) =
     raise newException(ValueError, "Collection name is required")
   self.collection = collection
 
+proc bucket*(self: KintoClient): string =
+  self.bucket
 
-proc getBuckets*(self: KintoClient, limit = 0): seq[Bucket] =
-  ## Returns the list of accessible buckets
-  result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(BUCKETS_ENDPOINT), limit=limit)
-  for n in node["data"].items:
-    result.add toObj[Bucket](n)
-  while headers.hasKey("next-page"):
-    (node, headers) = self.request(GET, headers["next-page"])
-    for n in node["data"].items:
-      result.add toObj[Bucket](n)
+proc collection*(self: KintoClient): string =
+  self.collection
 
+proc query*[T](typ: typedesc[T], client: KintoClient, coll = ""): Query[T] =
+  ## init new query object
+  new(result)
+  result.client = client
+  result.filters = @[]
 
-proc getCollections*(self: KintoClient, limit = 0): seq[Collection] =
-  ## Returns the list of accessible collections
-  result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket), limit=limit)
-  for n in node["data"].items:
-    result.add toObj[Collection](n)
-  while headers.hasKey("next-page"):
-    (node, headers) = self.request(GET, headers["next-page"])
-    for n in node["data"].items:
-      result.add toObj[Collection](n)
+  if coll != "":
+    result.client.collection = coll
 
-proc getRecords*[T: Record](self: KintoClient, limit = 0): seq[T] =
-  ## Returns the list of accessible records
-  result = @[]
-  var (node, headers) = self.request(GET, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection), limit=limit)
-  for n in node["data"].items:
-    result.add toObj[T](n)
-  while headers.hasKey("next-page"):
-    (node, headers) = self.request(GET, headers["next-page"])
-    for n in node["data"].items:
-      result.add toObj[T](n)
-
-
-proc get[T](self: KintoClient, endpoint: string): T =
-  var (node, _) = self.request(GET, endpoint)
+proc get*[T](q: Query[T], id: string): T =
+  when T is Bucket:
+    let endpoint = getEndpoint(BUCKET_ENDPOINT, id)
+  elif T is Collection:
+    let endpoint = getEndpoint(COLLECTION_ENDPOINT, q.client.bucket, id)
+  else:
+    let endpoint = getEndpoint(RECORD_ENDPOINT, q.client.bucket, q.client.collection, id)
+  var (node, _) = q.client.request(GET, endpoint)
   result = toObj[T](node["data"])
   result.permissions = toObj[Permissions](node{}["permissions"])
 
-proc getBucket*(self: KintoClient, id: string): Bucket =
-  get[Bucket](self, getEndpoint(BUCKET_ENDPOINT, id))
+proc limit*(q: Query, lm: int): Query =
+  ## limit number of records returned per request
+  result = q
+  result.filters.add "_limit=" & $lm
 
-proc getCollection*(self: KintoClient, id: string): Collection =
-  get[Collection](self, getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
+proc filter_by*(q: Query, field: string, value: auto): Query =
+  result = q
+  result.filters.add(field & "=" & $value)
 
-proc getRecord*[T: Record](self: KintoClient, id: string): T =
-  get[T](self, getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
+proc min*(q: Query, field: string, value: int): Query =
+  result = q
+  result.filters.add("min_" & field & "=" & $value)
+
+proc max*(q: Query, field: string, value: int): Query =
+  result = q
+  result.filters.add("max_" & field & "=" & $value)
+
+proc lt*(q: Query, field: string, value: int): Query =
+  result = q
+  result.filters.add("lt_" & field & "=" & $value)
+
+proc gt*(q: Query, field: string, value: int): Query =
+  result = q
+  result.filters.add("gt_" & field & "=" & $value)
+
+proc any*(q: Query, field: string, value: varargs[auto]): Query =
+  result = q
+  result.filters.add("in_" & field & "=" & dumps(value))
+
+proc exclude*(q: Query, field: string, values: varargs[auto]): Query =
+  result = q
+  if values.len == 1:
+    result.filters.add("not_" & field & "=" & $values[0])
+  else:
+    var value = ""
+    var first = true
+    for x in values:
+      if first:
+        first = false
+      else:
+        value.add ","
+      value.add x
+    result.filters.add("exclude_" & field & "=" & value)
+
+proc sort*(q: Query, fields: varargs[string]): Query =
+  result = q
+  var
+    filter = "_sort="
+    first = true
+  for x in fields:
+    if first:
+      first = false
+    else:
+      filter.add ","
+    filter.add x
+  result.filters.add(filter)
+
+proc all*[T](q: Query[T]): seq[T] =
+  ## return all results
+  result = @[]
+
+  var query = ""
+
+  if q.filters.len > 0:
+    var first = true
+    for x in q.filters:
+      if first:
+        first = false
+      else:
+        query.add "&"
+      query.add x
+
+  when T is Bucket:
+    let endpoint = getEndpoint(BUCKETS_ENDPOINT)
+  elif T is Collection:
+    let endpoint = getEndpoint(COLLECTIONS_ENDPOINT, q.client.bucket)
+  else:
+    let endpoint = getEndpoint(RECORDS_ENDPOINT, q.client.bucket, q.client.collection)
+
+  var (node, headers) = q.client.request(GET, endpoint, query=query)
+  for n in node["data"].items:
+    result.add toObj[T](n)
+  while headers.hasKey("next-page"):
+    (node, headers) = q.client.request(GET, headers["next-page"])
+    for n in node["data"].items:
+      result.add toObj[T](n)
 
 proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, updateOnly = true, forceOverwrite = false) =
   ## Create or update an Kinto object
   var
     headers = newStringTable()
-    httpMethod: HTTP_METHOD
+    httpMethod: httpMethod
     endpoint: string
     node: JsonNode
 
@@ -354,8 +348,8 @@ proc save*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, saf
     obj.lastModified = node["data"]["last_modified"].toInt
   obj.permissions = toObj[Permissions](node{}["permissions"])
 
-proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, lastModified = 0) =
-  ## Drop a Kinto object
+proc delete*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, safe = true, lastModified = 0) =
+  ## Delete a Kinto object
   var
     headers = newStringTable()
     endpoint: string
@@ -370,27 +364,3 @@ proc drop*[T: Bucket|Collection|Record|Group](self: KintoClient, obj: var T, saf
 
   collection.getCacheHeaders(headers, safe, lastModified=lastModified)
   discard self.request(DELETE, endpoint, headers=headers)
-
-proc dropBucket*(self: Kintoclient, id: string) =
-  discard self.request(DELETE, getEndpoint(BUCKET_ENDPOINT, id))
-
-proc dropCollection*(self: Kintoclient, id: string) =
-  discard self.request(DELETE, getEndpoint(COLLECTION_ENDPOINT, self.bucket, id))
-
-proc dropRecord*(self: Kintoclient, id: string) =
-  discard self.request(DELETE, getEndpoint(RECORD_ENDPOINT, self.bucket, self.collection, id))
-
-proc dropBuckets*(self: KintoClient) =
-  discard self.request(DELETE, getEndpoint(BUCKETS_ENDPOINT))
-
-proc dropCollections*(self: KintoClient) =
-  discard self.request(DELETE, getEndpoint(COLLECTIONS_ENDPOINT, self.bucket))
-
-proc dropRecords*(self: KintoClient) =
-  discard self.request(DELETE, getEndpoint(RECORDS_ENDPOINT, self.bucket, self.collection))
-
-proc dropGroups*(self: KintoClient) =
-  discard self.request(DELETE, getEndpoint(GROUPS_ENDPOINT, self.bucket))
-
-
-include private/batch

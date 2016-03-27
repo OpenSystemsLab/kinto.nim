@@ -14,3 +14,6 @@ proc `$`*(p: Proxy): string =
 
 template empty*(s: string): expr =
   s == nil or s == ""
+
+proc getEndpoint*(kind: string, a, b, c = ""): string {.inline, noSideEffect.} =
+  kind % [a, b, c]

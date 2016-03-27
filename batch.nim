@@ -1,7 +1,18 @@
+import kinto, private/defines, private/util
+import strtabs, strutils, ../../sam.nim/sam
+from json import escapeJson
+
 type
   Body* = tuple
     permissions: Permissions
     data: JsonNode
+
+  Request = object
+    httpMethod: httpMethod
+    path: string
+    data: string
+    perms: string
+    headers: StringTableRef
 
   Response* = object
     headers*: JsonNode
@@ -15,6 +26,41 @@ type
     requests: seq[Request]
 
 
+proc `%`(req: Request): JsonRaw {.inline.} =
+  var first = true
+  var ret = "{"
+  if req.httpMethod == UNKNOWN:
+    ret.add "\"method\":\"POST\""
+  else:
+    ret.add "\"method\":\"" & $req.httpMethod & "\""
+  if not empty(req.path):
+    ret.add ",\"path\":"
+    ret.add escapeJson(req.path)
+  if not req.headers.isNil and len(req.headers) > 0:
+    ret.add ",\"headers\":{"
+    for k, v in req.headers.pairs():
+      if first:
+        first = false
+      else:
+        ret.add ","
+      ret.add escapeJson(k) & ":" & escapeJson(v)
+    ret.add "}"
+  if not empty(req.data) or not empty(req.perms):
+    ret.add ",\"body\":{"
+    if not empty(req.data):
+      ret.add "\"data\":"
+      ret.add req.data
+    if not empty(req.perms):
+      if not empty(req.data):
+        ret.add ","
+      ret.add "\"permissions\":"
+      ret.add req.perms
+    ret.add "}"
+
+  ret.add "}"
+  (JsonRaw)ret
+
+
 proc batch*(self: KintoClient, httpMethod = POST, path = "", headers: StringTableRef = nil): KintoBatchClient =
   new(result)
   result.client = self
@@ -23,7 +69,7 @@ proc batch*(self: KintoClient, httpMethod = POST, path = "", headers: StringTabl
   result.default.headers = headers
   result.requests = @[]
 
-proc request(self: KintoBatchClient, httpMethod: HTTP_METHOD, endpoint: string, data, perms = "", headers: StringTableRef = nil) =
+proc request(self: KintoBatchClient, httpMethod: httpMethod, endpoint: string, data, perms = "", headers: StringTableRef = nil) =
   var req: Request
   req.httpMethod = httpMethod
   req.path = endpoint
@@ -80,7 +126,7 @@ proc save*[T: Bucket|Collection|Record|Group](self: KintoBatchClient, obj: var T
   ## Create or update an Kinto object
   var
     headers = newStringTable()
-    httpMethod: HTTP_METHOD
+    httpMethod: httpMethod
     endpoint: string
     node: JsonNode
 
