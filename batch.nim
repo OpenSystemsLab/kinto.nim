@@ -1,5 +1,5 @@
 import kinto, private/defines, private/util
-import strtabs, strutils, ../../sam.nim/sam
+import strtabs, strutils, sam
 from json import escapeJson
 
 type

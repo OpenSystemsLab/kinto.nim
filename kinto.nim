@@ -1,4 +1,4 @@
-import strutils, uri, base64, logging, typetraits, macros, strtabs, ../sam.nim/sam
+import strutils, uri, base64, logging, typetraits, macros, strtabs, sam
 import httpclient except httpMethod
 from json import escapeJson
 import private/defines, private/util, private/exception

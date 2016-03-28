@@ -1,6 +1,6 @@
 
 const
-  USER_AGENT* = "kinto.nim/0.2.0 (https://github.com/OpenSystemsLab/kinto.nim)"
+  USER_AGENT* = "kinto.nim/0.2.1 (https://github.com/OpenSystemsLab/kinto.nim)"
 
   ROOT_ENDPOINT* =         "/"
   BATCH_ENDPOINT* =        "/batch"
