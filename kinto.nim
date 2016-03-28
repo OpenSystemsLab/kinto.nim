@@ -15,7 +15,7 @@ type
     bucket: string
     collection: string
     proxy: Proxy
-    settings*: Settings
+    settings: Settings
 
   Permissions* {.final.} = object
     read*: seq[string]
@@ -57,6 +57,8 @@ when defined(debug):
   let L = newConsoleLogger()
   addHandler(L)
 
+proc getSettings*(self: KintoClient): Settings =
+  self.settings
 
 proc id*[T: Bucket|Collection](k: T): string {.inline.} =
   ## Getter of Object ID

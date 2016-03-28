@@ -83,12 +83,12 @@ proc send*(self: KintoBatchClient): seq[Response] =
   result = @[]
   var
     requests: seq[JsonRaw] = @[]
-    tmp = newSeq[Response](self.client.settings.batch_max_requests)
+    tmp = newSeq[Response](self.client.getSettings.batch_max_requests)
 
   for i in 0..<self.requests.len:
     requests.add %self.requests[i]
 
-    if requests.len >= self.requests.len or  requests.len >= self.client.settings.batch_max_requests:
+    if requests.len >= self.requests.len or  requests.len >= self.client.getSettings.batch_max_requests:
       var data = $${
         "default": %self.default,
         "requests": requests
