@@ -47,7 +47,7 @@ type
     permissions*: Permissions
     members*: seq[string]
 
-  Query[T] = ref object
+  Query*[T] = ref object
     client: KintoClient
     endpoint: string
     filters: seq[string]
@@ -215,36 +215,47 @@ proc get*[T](q: Query[T], id: string): T =
   result = toObj[T](node["data"])
   result.permissions = toObj[Permissions](node{}["permissions"])
 
-proc limit*(q: Query, lm: int): Query =
+proc limit*(q: Query, lm: int): Query {.inline.}  =
   ## limit number of records returned per request
   result = q
   result.filters.add "_limit=" & $lm
 
-proc filter_by*(q: Query, field: string, value: auto): Query =
+proc filter_by*(q: Query, field: string, value: string): Query {.inline.} =
   result = q
-  result.filters.add(field & "=" & $value)
+  result.filters.add(field & "=" & value)
 
-proc min*(q: Query, field: string, value: int): Query =
+proc min*(q: Query, field: string, value: string): Query {.inline.} =
   result = q
-  result.filters.add("min_" & field & "=" & $value)
+  result.filters.add("min_" & field & "=" & value)
 
-proc max*(q: Query, field: string, value: int): Query =
+proc max*(q: Query, field: string, value: string): Query {.inline.} =
   result = q
-  result.filters.add("max_" & field & "=" & $value)
+  result.filters.add("max_" & field & "=" & value)
 
-proc lt*(q: Query, field: string, value: int): Query =
+proc lt*(q: Query, field: string, value: int): Query {.inline.} =
   result = q
   result.filters.add("lt_" & field & "=" & $value)
 
-proc gt*(q: Query, field: string, value: int): Query =
+proc gt*(q: Query, field: string, value: int): Query {.inline.} =
   result = q
   result.filters.add("gt_" & field & "=" & $value)
 
-proc any*(q: Query, field: string, value: varargs[auto]): Query =
+proc any*(q: Query, field: string, value: varargs[string]): Query {.inline.} =
   result = q
-  result.filters.add("in_" & field & "=" & dumps(value))
+  var
+    first = true
+    filter = "in_" & field & "="
 
-proc exclude*(q: Query, field: string, values: varargs[auto]): Query =
+  for x in value:
+    if first:
+      first = false
+    else:
+      filter.add ","
+    filter.add x
+
+  result.filters.add(filter)
+
+proc exclude*(q: Query, field: string, values: varargs[auto]): Query {.inline.} =
   result = q
   if values.len == 1:
     result.filters.add("not_" & field & "=" & $values[0])
@@ -259,7 +270,7 @@ proc exclude*(q: Query, field: string, values: varargs[auto]): Query =
       value.add x
     result.filters.add("exclude_" & field & "=" & value)
 
-proc sort*(q: Query, fields: varargs[string]): Query =
+proc sort*(q: Query, fields: varargs[string]): Query {.inline.} =
   result = q
   var
     filter = "_sort="
@@ -271,6 +282,51 @@ proc sort*(q: Query, fields: varargs[string]): Query =
       filter.add ","
     filter.add x
   result.filters.add(filter)
+
+macro filter*(q, n: expr): expr {.immediate.} =
+  ## apply filters for records
+  echo treeRepr(n)
+  const infixOps = [
+    ("==",  "filter_by"),
+    ("<=",  "min"),
+    (">=",   "max"),
+    ("<", "lt"),
+    (">",  "gt"),
+    ("in", "any"),
+    ("!=", "exclude"),
+    ("notin", "exclude")
+  ]
+  result = newNimNode(nnkStmtList, n)
+
+  var
+    op: string
+    fun: string
+    field: string
+    value: string
+    node: NimNode
+    first = true
+
+  for i in 0..n.len-1:
+    node = n[i]
+    if n[i].kind == nnkInfix:
+       fun = ""
+       op = $(n[i][0])
+       field = $(n[i][1])
+       for j in 0..infixOps.len-1:
+         if op == infixOps[j][0]:
+           fun = infixOps[j][1]
+       if fun == "":
+         raise newException(KeyError, "unsupported operator: " & op)
+       value = nimNodeToString(node[2])
+       if first:
+         first = false
+         result.add newCall(fun, q, newStrLitNode(field), newStrLitNode(value))
+       else:
+         result.add newCall(fun, result.last, newStrLitNode(field), newStrLitNode(value))
+    else:
+      raise newException(ValueError, "invalid expression")
+  result = result.last
+  echo treeRepr(result)
 
 proc all*[T](q: Query[T]): seq[T] =
   ## return all results
