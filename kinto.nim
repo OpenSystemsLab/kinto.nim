@@ -287,7 +287,6 @@ proc sort*(q: Query, fields: varargs[string]): Query {.inline.} =
 
 macro filter*(q, n: expr): expr {.immediate.} =
   ## apply filters for records
-  echo treeRepr(n)
   const infixOps = [
     ("==",  "filter_by"),
     ("<=",  "min"),
@@ -328,7 +327,6 @@ macro filter*(q, n: expr): expr {.immediate.} =
     else:
       raise newException(ValueError, "invalid expression")
   result = result.last
-  echo treeRepr(result)
 
 proc all*[T](q: Query[T]): seq[T] =
   ## return all results
